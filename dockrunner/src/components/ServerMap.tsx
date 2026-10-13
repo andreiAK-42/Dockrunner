@@ -32,8 +32,9 @@ import { timeAgo } from "../utils/time";
 import { PingText } from "./Ping";
 import type { Coordinates } from "@vnedyalk0v/react19-simple-maps";
 import styles from "./ServerMap.module.scss";
-
-const geoUrl = "https://unpkg.com/world-atlas@2.0.2/countries-110m.json";
+// География встроена в бандл: на проде unpkg.com может быть недоступен
+// (блокировки CDN, таймаут 10с, SRI) — тогда падал фон карты.
+import worldTopo from "../assets/world-110m.json";
 
 const INITIAL_CENTER: Coordinates = [0, 20] as Coordinates;
 const INITIAL_ZOOM = 1;
@@ -341,7 +342,7 @@ export default function ServerMap({
           maxZoom={MAX_ZOOM}
           onMoveEnd={handleMoveEnd}
         >
-          <Geographies geography={geoUrl}>
+          <Geographies geography={worldTopo}>
             {(geographyProps: { geographies: GeographyItem[] }) =>
               geographyProps.geographies.map((geo) => (
                 <Geography

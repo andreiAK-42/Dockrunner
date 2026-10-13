@@ -63,13 +63,23 @@ func toGB(bytes float64) float64 {
 	return bytes / 1024 / 1024 / 1024
 }
 
-// lanIP returns the LAN IPv4 of this machine (the address users reach
-// published ports on). No packets are sent by the UDP dial.
-func lanIP() string {
-	if ip := dialOutIP(); ip != "" {
-		return ip
+// resolveIP возвращает IPv4 сервера (адрес, по которому пользователи
+// достучатся до опубликованных портов).
+//  1. Явный AGENT_IP из .env — единственный надёжный вариант, если агент
+//     в docker (из контейнера виден только его 172.17.0.x).
+//  2. Публичный IP исходящего маршрута.
+//  3. Лучший интерфейс: виртуальные (docker/veth/tailscale/...) пропускаются,
+//     среди остальных предпочитается публичный адрес.
+func resolveIP(publicIP string) string {
+	if publicIP != "" {
+		return publicIP
 	}
-	return firstUpIPv4()
+	if ip := dialOutIP(); ip != "" {
+		if parsed := net.ParseIP(ip); parsed != nil && isPublicIPv4(parsed) {
+			return ip
+		}
+	}
+	return bestInterfaceIP()
 }
 
 // dialOutIP узнаёт исходящий IP через UDP-dial (пакеты не отправляются).
@@ -86,21 +96,73 @@ func dialOutIP() string {
 	return addr.IP.String()
 }
 
-// firstUpIPv4 — первый IPv4 поднятого не-loopback интерфейса.
-func firstUpIPv4() string {
+// isVirtualIface — docker-мосты, veth-пары, VPN-туннели и т.п.
+// Их адреса (172.17.0.x, 10.x tailscale) пользователям не нужны.
+func isVirtualIface(name string) bool {
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{
+		"docker", "veth", "br-", "virbr", "vnet",
+		"tailscale", "tun", "tap", "wg", "cni",
+		"flannel", "cali", "kube",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPublicIPv4(ip net.IP) bool {
+	v4 := ip.To4()
+	if v4 == nil {
+		return false
+	}
+	if v4.IsLoopback() || v4.IsLinkLocalUnicast() || v4.IsMulticast() {
+		return false
+	}
+	if v4.IsPrivate() {
+		return false
+	}
+	if v4[0] == 100 && v4[1] >= 64 && v4[1] < 128 {
+		return false // CGNAT (tailscale)
+	}
+	if v4[0] == 0 || v4[0] >= 224 {
+		return false
+	}
+	return true
+}
+
+// bestInterfaceIP — первый публичный IPv4 среди физических интерфейсов,
+// иначе первый приватный (для чисто локальных сетей).
+func bestInterfaceIP() string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return ""
 	}
+	fallback := ""
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if ip := ifaceIPv4(iface); ip != "" {
+		if isVirtualIface(iface.Name) {
+			continue
+		}
+		ip := ifaceIPv4(iface)
+		if ip == "" {
+			continue
+		}
+		parsed := net.ParseIP(ip)
+		if parsed == nil || parsed.IsLinkLocalUnicast() {
+			continue
+		}
+		if isPublicIPv4(parsed) {
 			return ip
 		}
+		if fallback == "" {
+			fallback = ip
+		}
 	}
-	return ""
+	return fallback
 }
 
 func ifaceIPv4(iface net.Interface) string {
@@ -167,9 +229,9 @@ func collectStorage(ctx context.Context, db *sql.DB, dock *docker.Client, worksp
 	return out
 }
 
-func Collect(ctx context.Context, db *sql.DB, dock *docker.Client, workspace, agentID, hostname, agentName, description, city string, lat, lng float64, apiURL string) (Report, error) {
+func Collect(ctx context.Context, db *sql.DB, dock *docker.Client, workspace, agentID, hostname, agentName, description, city string, lat, lng float64, apiURL, publicIP string) (Report, error) {
 	report := Report{
-		AgentID: agentID, Hostname: hostname, Name: agentName, IP: lanIP(),
+		AgentID: agentID, Hostname: hostname, Name: agentName, IP: resolveIP(publicIP),
 		Description: description, City: city, Lat: lat, Lng: lng, ApiURL: apiURL,
 	}
 	if percents, err := cpu.PercentWithContext(ctx, 500*time.Millisecond, false); err == nil && len(percents) > 0 {
@@ -551,7 +613,7 @@ func (e *statusError) Error() string {
 	return "heartbeat rejected: " + http.StatusText(e.code)
 }
 
-func Start(ctx context.Context, logger *slog.Logger, centralURL, token, agentID, hostname, agentName, description, city string, lat, lng float64, apiURL string, interval time.Duration, db *sql.DB, dock *docker.Client, workspace string) {
+func Start(ctx context.Context, logger *slog.Logger, centralURL, token, agentID, hostname, agentName, description, city string, lat, lng float64, apiURL, publicIP string, interval time.Duration, db *sql.DB, dock *docker.Client, workspace string) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -559,7 +621,7 @@ func Start(ctx context.Context, logger *slog.Logger, centralURL, token, agentID,
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			report, _ := Collect(ctx, db, dock, workspace, agentID, hostname, agentName, description, city, lat, lng, apiURL)
+			report, _ := Collect(ctx, db, dock, workspace, agentID, hostname, agentName, description, city, lat, lng, apiURL, publicIP)
 			if err := sendOnce(ctx, centralURL, token, report); err != nil {
 				logger.Warn("heartbeat failed", "error", err)
 			}

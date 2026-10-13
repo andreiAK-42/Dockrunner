@@ -42,7 +42,13 @@ CENTRAL_URL=https://panel.example.com
 AGENT_TOKEN=тот-же-что-у-бэкенда   # 1 в 1 как AGENT_TOKEN централи
 RABBITMQ_URL=amqp://dockrunner:dockrunner@central:5672/
 AGENT_PUBLIC_URL=http://<ip-сервера>:8090
+AGENT_IP=147.45.210.164       # внешний IP сервера; обязателен для docker-запуска
 ```
+
+IP определяется сам (публичный адрес физического интерфейса, docker/veth/
+tailscale пропускаются), но из контейнера хостовый IP увидеть нельзя —
+там всегда будет `172.17.0.x`, поэтому для docker-варианта `AGENT_IP`
+задавай явно.
 
 Необязательное: `AGENT_DESCRIPTION`, `AGENT_LAT/AGENT_LNG` (точка на карте),
 `DOCKER_HOST` (пусто = `/var/run/docker.sock`), `HEARTBEAT_INTERVAL=15s`,

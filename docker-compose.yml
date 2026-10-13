@@ -24,7 +24,10 @@ services:
       AGENT_TOKEN: change-me-agent-shared-secret
       ADMIN_LOGIN: admin
       ADMIN_PASSWORD: admin123
-      CORS_ALLOWED_ORIGINS: http://localhost,http://localhost:5173
+      # ВАЖНО: сюда должен входить адрес, с которого открываешь панель
+      # (иначе браузер заблокирует запросы CORS). Задаётся через .env рядом
+      # с compose: CORS_ALLOWED_ORIGINS=http://82.179.9.27
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://localhost:5173}
       PORTS_MIN: 3000
       PORTS_MAX: 4000
 

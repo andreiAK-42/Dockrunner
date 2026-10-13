@@ -89,7 +89,7 @@ func main() {
 	}
 
 	hostname, _ := os.Hostname()
-	go heartbeat.Start(ctx, logger, cfg.CentralURL, cfg.Token, cfg.AgentID, hostname, cfg.AgentName, cfg.AgentDescription, cfg.AgentCity, cfg.AgentLat, cfg.AgentLng, cfg.AgentPublicURL, cfg.Heartbeat, db, dockCli, cfg.Workspace)
+	go heartbeat.Start(ctx, logger, cfg.CentralURL, cfg.Token, cfg.AgentID, hostname, cfg.AgentName, cfg.AgentDescription, cfg.AgentCity, cfg.AgentLat, cfg.AgentLng, cfg.AgentPublicURL, cfg.AgentIP, cfg.Heartbeat, db, dockCli, cfg.Workspace)
 
 	apiSrv := api.New(cfg, db, dockCli, streamer, builds, logger.Info)
 	httpSrv := &http.Server{

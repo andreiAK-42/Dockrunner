@@ -21,6 +21,9 @@ type Config struct {
 	AgentLat            float64
 	AgentLng            float64
 	AgentPublicURL      string
+	// Явный внешний IP сервера (обязателен, если агент в docker:
+	// из контейнера хостовый IP автоопределением не достать).
+	AgentIP             string
 	CentralURL          string
 	Token               string
 	RabbitURL           string
@@ -61,6 +64,7 @@ func Load() Config {
 		AgentLat:            getFloat("AGENT_LAT", 0),
 		AgentLng:            getFloat("AGENT_LNG", 0),
 		AgentPublicURL:      getEnv("AGENT_PUBLIC_URL", ""),
+		AgentIP:             getEnv("AGENT_IP", ""),
 		CentralURL:          getEnv("CENTRAL_URL", "http://localhost:8080"),
 		Token:               getEnv("AGENT_TOKEN", ""),
 		RabbitURL:           getEnv("RABBITMQ_URL", "amqp://dockrunner:dockrunner@localhost:5672/"),

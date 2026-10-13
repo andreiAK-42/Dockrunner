@@ -4,8 +4,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 # URL бэкенда вшивается на этапе сборки (браузер ходит в API напрямую).
+# Пишем его в .env.production, чтобы Vite гарантированно подхватил значение
+# именно из build-arg, а не из process.env.
 ARG VITE_API_URL=http://localhost:8080
-ENV VITE_API_URL=$VITE_API_URL
+RUN echo "VITE_API_URL=$VITE_API_URL" > .env.production
 RUN npm run build
 
 FROM nginx:alpine
