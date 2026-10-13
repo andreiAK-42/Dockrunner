@@ -11,6 +11,15 @@ import (
 	"dockrunner_backend/pkg/response"
 )
 
+func forbiddenOrInternal(c *gin.Context, err error, what string, logger *zap.Logger) {
+	if errors.Is(err, ErrForbidden) {
+		response.Forbidden(c, err.Error())
+		return
+	}
+	logger.Error(what, zap.Error(err))
+	response.Internal(c, "failed to update user")
+}
+
 var errInvalidDate = errors.New("invalid date")
 
 type Handler struct {
@@ -90,9 +99,8 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	if err := h.service.UpdateRole(c.Request.Context(), id, req.Role); err != nil {
-		h.logger.Error("update role failed", zap.Error(err))
-		response.Internal(c, "failed to update role")
+	if err := h.service.UpdateRole(c.Request.Context(), c.GetString("login"), id, req.Role); err != nil {
+		forbiddenOrInternal(c, err, "update role failed", h.logger)
 		return
 	}
 	response.OK(c, gin.H{"message": "role updated"})
@@ -108,9 +116,8 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 // @Router /api/v1/users/{id} [delete]
 func (h *Handler) Delete(c *gin.Context) {
 	id := c.Param("id")
-	if err := h.service.Delete(c.Request.Context(), id); err != nil {
-		h.logger.Error("delete user failed", zap.Error(err))
-		response.Internal(c, "failed to delete user")
+	if err := h.service.Delete(c.Request.Context(), c.GetString("login"), id); err != nil {
+		forbiddenOrInternal(c, err, "delete user failed", h.logger)
 		return
 	}
 	c.JSON(204, nil)
@@ -137,12 +144,40 @@ func (h *Handler) SetBlocked(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	if err := h.service.SetBlocked(c.Request.Context(), id, req.Blocked); err != nil {
-		h.logger.Error("block user failed", zap.Error(err))
-		response.Internal(c, "failed to update user")
+	if err := h.service.SetBlocked(c.Request.Context(), c.GetString("login"), id, req.Blocked); err != nil {
+		forbiddenOrInternal(c, err, "block user failed", h.logger)
 		return
 	}
 	response.OK(c, gin.H{"message": "user updated"})
+}
+
+type PasswordRequest struct {
+	Password string `json:"password" binding:"required,min=6,max=72" example:"new-secret123"`
+}
+
+// SetPassword godoc
+// @Summary Сменить пароль пользователя (админ; админам — только главный)
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "ID пользователя"
+// @Param request body users.PasswordRequest true "Новый пароль (6..72)"
+// @Success 200 {object} response.Success
+// @Failure 403 {object} response.Error
+// @Router /api/v1/users/{id}/password [patch]
+func (h *Handler) SetPassword(c *gin.Context) {
+	id := c.Param("id")
+	var req PasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	if err := h.service.SetPassword(c.Request.Context(), c.GetString("login"), id, req.Password, h.bcryptCost); err != nil {
+		forbiddenOrInternal(c, err, "set password failed", h.logger)
+		return
+	}
+	response.OK(c, gin.H{"message": "password updated"})
 }
 
 type PlanRequest struct {

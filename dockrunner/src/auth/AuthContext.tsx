@@ -6,6 +6,7 @@ interface User {
   login: string
   name: string
   role: string
+  isSuperuser: boolean
 }
 
 interface AuthContextValue {
@@ -18,9 +19,9 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null)
 const STORAGE_KEY = 'dockyard-auth-v1'
 
-function toUser(userLogin: string, role: string): User {
+function toUser(userLogin: string, role: string, isSuperuser?: boolean): User {
   const displayName = userLogin.charAt(0).toUpperCase() + userLogin.slice(1)
-  return { login: userLogin, role, name: displayName }
+  return { login: userLogin, role, name: displayName, isSuperuser: !!isSuperuser }
 }
 
 function loadStoredUser(): User | null {
@@ -41,7 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user && getToken()) {
       fetchMe()
-        .then((res) => setUser(toUser(res.data.login, res.data.role)))
+        .then((res) => setUser(toUser(res.data.login, res.data.role, res.data.is_superuser)))
         .catch(() => clearTokens())
     }
   }, [user])
@@ -60,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (userLogin: string, password: string) => {
     const res = await apiLogin(userLogin, password)
-    setUser(toUser(res.user.login, res.user.role))
+    setUser(toUser(res.user.login, res.user.role, res.user.is_superuser))
   }
 
   const logout = () => {

@@ -5,6 +5,7 @@ export interface AdminUser {
   login: string
   role: string
   blocked: boolean
+  isSuperuser: boolean
   planId: string
   planExpires: string | null
 }
@@ -83,6 +84,7 @@ interface ApiUser {
   login: string
   role: string
   blocked: boolean
+  is_superuser: boolean
   plan_id: string
   plan_expires: string | null
 }
@@ -93,6 +95,7 @@ function toAdminUser(u: ApiUser): AdminUser {
     login: u.login,
     role: u.role,
     blocked: u.blocked,
+    isSuperuser: !!u.is_superuser,
     planId: u.plan_id,
     planExpires: u.plan_expires,
   }
@@ -114,6 +117,13 @@ export function setUserBlocked(id: string, blocked: boolean) {
   return apiRequest(`/api/v1/users/${id}/block`, {
     method: 'PATCH',
     body: { blocked },
+  })
+}
+
+export function setUserPassword(id: string, password: string) {
+  return apiRequest(`/api/v1/users/${id}/password`, {
+    method: 'PATCH',
+    body: { password },
   })
 }
 

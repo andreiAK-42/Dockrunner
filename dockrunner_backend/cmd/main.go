@@ -137,6 +137,8 @@ func connectPostgres(ctx context.Context, cfg *config.Config, zlog *zap.Logger) 
 
 	_ = postgre.Migrate(ctx, pg, zlog)
 	users.SeedAdmin(ctx, pg, cfg.AdminLogin, cfg.AdminPassword, cfg.BcryptCost, zlog)
+	// Главный админ из .env всегда суперпользователь (пережил старые базы).
+	users.EnsureSuperuser(ctx, pg, cfg.AdminLogin, zlog)
 	return pg
 }
 

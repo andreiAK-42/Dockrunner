@@ -14,6 +14,7 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, jwtSecret string) {
 		users.GET("/:id", h.GetByID)
 		users.PATCH("/:id/role", middleware.RequireRole("admin"), h.UpdateRole)
 		users.PATCH("/:id/block", middleware.RequireRole("admin"), h.SetBlocked)
+		users.PATCH("/:id/password", middleware.RequireRole("admin"), h.SetPassword)
 		users.PATCH("/:id/plan", middleware.RequireRole("admin"), h.SetPlan)
 		users.DELETE("/:id", middleware.RequireRole("admin"), h.Delete)
 	}

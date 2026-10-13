@@ -1,8 +1,9 @@
 import { useEffect, useState, useMemo } from 'react'
 import { Box, Button, Card, CardContent, Stack, Typography, Chip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Dialog, DialogTitle, DialogContent, DialogActions, TextField, FormControl, InputLabel, Select, MenuItem, Tabs, Tab, Divider, IconButton, Alert, Paper } from '@mui/material'
-import { Plus, Ban, CheckCircle2, Crown, Square, RefreshCw, RotateCcw, Trash2, DollarSign, CreditCard, Receipt, Settings, Check, X, Eye } from 'lucide-react'
-import { fetchAdminUsers, createAdminUser, setUserBlocked, setUserPlan, fetchTariffPlans, fetchAdminContainers, adminContainerAction, rebootServer, fetchPendingRequests, fetchAllRequests, approveRequest, rejectRequest, setRequestPrice, fetchPricing, setPricing, fetchUserBalance, addUserBalance, setUserBalance, fetchAllTransactions } from '../../api/admin'
+import { Plus, Ban, CheckCircle2, Crown, Square, RefreshCw, RotateCcw, Trash2, DollarSign, CreditCard, Receipt, Settings, Check, X, Eye, KeyRound } from 'lucide-react'
+import { fetchAdminUsers, createAdminUser, setUserBlocked, setUserPassword, setUserPlan, fetchTariffPlans, fetchAdminContainers, adminContainerAction, rebootServer, fetchPendingRequests, fetchAllRequests, approveRequest, rejectRequest, setRequestPrice, fetchPricing, setPricing, fetchUserBalance, addUserBalance, setUserBalance, fetchAllTransactions } from '../../api/admin'
 import type { AdminUser, AdminContainer, TariffPlan, DeploymentRequest, PricingRate, BalanceTransaction } from '../../api/admin'
+import { useAuth } from '../../auth/AuthContext'
 import { useAgents } from '../../hooks/useAgents'
 import { timeAgo } from '../../utils/time'
 import { PingText } from '../../components/Ping'
@@ -69,6 +70,12 @@ export default function Admin() {
   const [balanceAmount, setBalanceAmount] = useState(0)
   const [balanceReason, setBalanceReason] = useState('')
   const [balanceSetValue, setBalanceSetValue] = useState(0)
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const [passwordUserId, setPasswordUserId] = useState('')
+  const [passwordUserLogin, setPasswordUserLogin] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const { user: currentUser } = useAuth()
+  const isSuperuser = !!currentUser?.isSuperuser
   const { nodes, loading: nodesLoading } = useAgents()
   const [containerFilterUser, setContainerFilterUser] = useState('')
   const [containerFilterAgent, setContainerFilterAgent] = useState('')
@@ -134,7 +141,38 @@ export default function Admin() {
   const handleBlock = (user: AdminUser) => {
     setUserBlocked(user.id, !user.blocked)
       .then(reloadAll)
-      .catch(() => setError('Не удалось изменить статус'))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось изменить статус'))
+  }
+
+  const canManageUser = (user: AdminUser) => {
+    if (user.isSuperuser) {
+      return isSuperuser && user.login === currentUser?.login
+    }
+    if (user.role === 'admin') {
+      return isSuperuser
+    }
+    return true
+  }
+
+  const openPasswordDialog = (user: AdminUser) => {
+    setPasswordUserId(user.id)
+    setPasswordUserLogin(user.login)
+    setNewPassword('')
+    setPasswordOpen(true)
+  }
+
+  const handleSavePassword = () => {
+    if (newPassword.length < 6) {
+      setError('Пароль должен быть минимум 6 символов')
+      return
+    }
+    setUserPassword(passwordUserId, newPassword)
+      .then(() => {
+        setPasswordOpen(false)
+        setNewPassword('')
+        reloadAll()
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Не удалось сменить пароль'))
   }
 
   const openPlanDialog = (user: AdminUser) => {
@@ -308,23 +346,38 @@ export default function Admin() {
             <Table size="small">
               <TableHead><TableRow><TableCell>Пользователь</TableCell><TableCell>Роль</TableCell><TableCell>Тариф</TableCell><TableCell>Действует до</TableCell><TableCell>Статус</TableCell><TableCell>Действия</TableCell></TableRow></TableHead>
               <TableBody>
-                {users.map((adminUser) => (
+                {users.map((adminUser) => {
+                  const manageable = canManageUser(adminUser)
+                  const blockDisabled = !manageable || adminUser.isSuperuser
+                  const blockHint = adminUser.isSuperuser
+                    ? 'Главного администратора заблокировать нельзя'
+                    : !manageable
+                      ? 'Администраторов блокирует только главный'
+                      : undefined
+                  return (
                   <TableRow key={adminUser.id} hover>
                     <TableCell><Typography variant="body2" sx={{ fontWeight: 600 }}>{adminUser.login}</Typography><Typography variant="caption" color="text.secondary">{adminUser.id.slice(0, 8)}</Typography></TableCell>
-                    <TableCell><Chip size="small" label={adminUser.role} variant="outlined" /></TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={0.5}>
+                        <Chip size="small" label={adminUser.role} variant="outlined" />
+                        {adminUser.isSuperuser && <Chip size="small" label="Главный" color="warning" />}
+                      </Stack>
+                    </TableCell>
                     <TableCell><Chip size="small" icon={<Crown size={12} />} label={planName(plans, adminUser.planId)} color="primary" variant="outlined" /></TableCell>
                     <TableCell>{formatExpiry(adminUser.planExpires)}</TableCell>
                     <TableCell>{adminUser.blocked ? <Chip size="small" label="Заблокирован" color="error" /> : <Chip size="small" label="Активен" color="success" />}</TableCell>
                     <TableCell>
                       <Stack direction="row" spacing={1}>
                         <Button size="small" onClick={() => openPlanDialog(adminUser)}>Тариф</Button>
-                        <Button size="small" color={adminUser.blocked ? 'success' : 'error'} startIcon={adminUser.blocked ? <CheckCircle2 size={14} /> : <Ban size={14} />} onClick={() => handleBlock(adminUser)}>
+                        <Button size="small" startIcon={<KeyRound size={14} />} disabled={!manageable} title={manageable ? 'Сменить пароль' : 'Пароли администраторов меняет только главный'} onClick={() => openPasswordDialog(adminUser)}>Пароль</Button>
+                        <Button size="small" color={adminUser.blocked ? 'success' : 'error'} startIcon={adminUser.blocked ? <CheckCircle2 size={14} /> : <Ban size={14} />} disabled={blockDisabled} title={blockHint} onClick={() => handleBlock(adminUser)}>
                           {adminUser.blocked ? 'Разблокировать' : 'Заблокировать'}
                         </Button>
                       </Stack>
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
                 {users.length === 0 && <TableRow><TableCell colSpan={6} sx={{ textAlign: 'center', py: 3, color: 'text.secondary' }}>Нет данных</TableCell></TableRow>}
               </TableBody>
             </Table>
@@ -661,6 +714,19 @@ export default function Admin() {
         <DialogActions>
           <Button onClick={() => setPlanOpen(false)}>Отмена</Button>
           <Button variant="contained" onClick={handleSavePlan}>Сохранить</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={passwordOpen} onClose={() => setPasswordOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Новый пароль: {passwordUserLogin}</DialogTitle>
+        <DialogContent>
+          <Stack className={styles.dialogContent}>
+            <TextField label="Новый пароль" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Минимум 6 символов" autoFocus fullWidth sx={{ mt: 1 }} />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPasswordOpen(false)}>Отмена</Button>
+          <Button variant="contained" disabled={newPassword.length < 6} onClick={handleSavePassword}>Сохранить</Button>
         </DialogActions>
       </Dialog>
 

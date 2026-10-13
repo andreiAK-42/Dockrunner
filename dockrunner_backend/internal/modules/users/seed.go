@@ -32,3 +32,15 @@ func SeedAdmin(ctx context.Context, pool *pgxpool.Pool, login, password string, 
 	}
 	logger.Info("seed admin created", zap.String("login", login))
 }
+
+// EnsureSuperuser помечает логин из .env главным администратором.
+// Нужно для баз, созданных до появления флага is_superuser.
+func EnsureSuperuser(ctx context.Context, pool *pgxpool.Pool, login string, logger *zap.Logger) {
+	if pool == nil || login == "" {
+		return
+	}
+	repo := NewRepository(pool, logger)
+	if err := repo.EnsureSuperuser(ctx, login); err != nil {
+		logger.Warn("ensure superuser failed", zap.Error(err))
+	}
+}

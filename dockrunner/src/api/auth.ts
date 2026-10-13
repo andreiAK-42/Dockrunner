@@ -4,6 +4,7 @@ export interface AuthUser {
   id: string
   login: string
   role: string
+  is_superuser?: boolean
 }
 
 export interface LoginResponse {
