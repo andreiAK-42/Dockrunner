@@ -1,0 +1,124 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page-narrow(1100px);
+}
+
+.header__title {
+  @include section-title;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.presets {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+
+  &__item {
+    width: 96px;
+    height: 64px;
+    border-radius: 12px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 1px solid var(--custom-divider);
+    opacity: 0.9;
+    transition: opacity 0.2s;
+    &:hover { opacity: 1; }
+
+    &--active {
+      border: 2px solid var(--custom-primary);
+      opacity: 1;
+    }
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+
+  &__empty {
+    width: 96px;
+    height: 64px;
+    border-radius: 12px;
+    border: 1px dashed var(--custom-divider);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+
+    &--active {
+      background: color-mix(in srgb, var(--custom-divider) 30%, transparent);
+    }
+  }
+}
+
+.previewCard {
+  position: sticky;
+  top: 80px;
+
+  &__viewport {
+    height: 320px;
+    border-radius: var(--custom-radius);
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--custom-divider);
+    background: var(--custom-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__bg {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    transition: all 0.3s;
+  }
+
+  &__overlay {
+    position: absolute;
+    inset: 0;
+  }
+
+  &__content {
+    position: relative;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 85%;
+  }
+
+  &__inner {
+    padding: 16px;
+    border-radius: 10px;
+    background: var(--custom-paper);
+    border: 1px solid var(--custom-divider);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 16px;
+  }
+}
+
+.sectionTitle {
+  font-weight: 650;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  font-weight: 600;
+  margin-bottom: 8px;
+}

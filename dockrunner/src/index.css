@@ -1,0 +1,157 @@
+/* =========================
+   Dockrunner — Global Styles
+   - CSS variables for theming & customization
+   - Shared page layouts live in SCSS mixins (src/styles/_mixins.scss)
+   ========================= */
+
+/* --- CSS Variables --- */
+:root {
+  --custom-primary: #fafafa;
+  --custom-secondary: #a1a1aa;
+  --custom-bg: #09090b;
+  --custom-paper: #18181b;
+  --custom-accent: #c084fc;
+  --custom-text: #fafafa;
+  --custom-text-secondary: #a1a1aa;
+  --custom-divider: #27272a;
+  --custom-radius: 12px;
+
+  --custom-bg-image: none;
+  --custom-bg-opacity: 0;
+  --custom-bg-blur: 0px;
+  --custom-overlay: #09090b;
+  --custom-overlay-opacity: 0;
+
+  /* Typography */
+  --sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+
+  /* Legacy aliases for components that used old names */
+  --bg: var(--custom-bg);
+  --paper: var(--custom-paper);
+  --text: var(--custom-text-secondary);
+  --text-h: var(--custom-text);
+  --border: var(--custom-divider);
+  --accent: var(--custom-accent);
+}
+
+/* --- Reset & Base --- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--custom-text);
+  background: var(--custom-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Background image layer with overlay & blur */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: var(--custom-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: var(--custom-bg-opacity);
+  filter: blur(var(--custom-bg-blur));
+  pointer-events: none;
+  z-index: -2;
+  transition: opacity 0.4s ease, filter 0.4s ease;
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: var(--custom-overlay);
+  opacity: var(--custom-overlay-opacity);
+  pointer-events: none;
+  z-index: -1;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  isolation: isolate;
+}
+
+/* --- Typography --- */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--sans);
+  color: var(--custom-text);
+  margin: 0;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+h1 { font-size: 2.5rem; font-weight: 800; }
+h2 { font-size: 2rem; font-weight: 700; }
+h3 { font-size: 1.5rem; font-weight: 700; }
+h4 { font-size: 1.25rem; font-weight: 600; }
+p { margin: 0; color: var(--custom-text-secondary); }
+a { color: var(--custom-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* --- Scrollbar --- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--custom-divider); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--custom-text-secondary); }
+
+/* --- Common Layout Utilities --- */
+/* Page layout lives in CSS modules via shared mixins (src/styles/_mixins.scss) */
+
+/* --- Animations --- */
+
+/* --- MUI Overrides via CSS (supplement to theme) --- */
+.MuiCard-root {
+  border: 1px solid var(--custom-divider) !important;
+}
+.MuiDrawer-paper {
+  background: var(--custom-paper) !important;
+}
+.MuiAppBar-root {
+  backdrop-filter: blur(8px);
+}
+
+/* When background image is active — make surfaces translucent so image is visible */
+.has-bg-image .MuiPaper-root,
+.has-bg-image .MuiCard-root {
+  background-color: color-mix(in srgb, var(--custom-paper) 82%, transparent) !important;
+  backdrop-filter: blur(6px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2);
+}
+.has-bg-image .MuiAppBar-root {
+  background-color: color-mix(in srgb, var(--custom-paper) 78%, transparent) !important;
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+}
+.has-bg-image .MuiDrawer-paper {
+  background-color: color-mix(in srgb, var(--custom-paper) 86%, transparent) !important;
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+}
+.has-bg-image #root,
+.has-bg-image [class*="Layout-main"],
+.has-bg-image main {
+  background: transparent !important;
+}

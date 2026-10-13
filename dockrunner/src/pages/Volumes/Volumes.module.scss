@@ -1,0 +1,62 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page;
+}
+
+.header {
+  @include page-header;
+
+  &__title { @include section-title; }
+}
+
+.statsGrid {
+  @include stats-grid;
+}
+
+.volumeList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.volumeItem {
+  padding: 16px;
+  border: 1px solid var(--custom-divider);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+
+  &__main {
+    flex: 1;
+    min-width: 180px;
+  }
+
+  &__name { font-weight: 650; }
+
+  &__progress {
+    width: 220px;
+    @media (max-width: $breakpoint-sm) { width: 100%; }
+
+    &__bar {
+      margin-top: 4px;
+      height: 6px;
+      border-radius: 999px;
+    }
+  }
+}
+
+.dialogContent {
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sectionTitle {
+  font-weight: 650;
+  margin-bottom: 16px;
+}

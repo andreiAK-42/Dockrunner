@@ -1,0 +1,49 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page;
+}
+
+.header {
+  @include page-header;
+
+  &__title {
+    @include section-title;
+  }
+}
+
+.gridWrap {
+  height: 600px;
+  width: 100%;
+}
+
+.cardContentNoPad {
+  padding: 0;
+
+  &:last-child {
+    padding-bottom: 0;
+  }
+}
+
+.actions {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dataGrid {
+  border: none;
+
+  :global(.MuiDataGrid-cell) {
+    border-color: var(--custom-divider);
+  }
+  :global(.MuiDataGrid-columnHeaders) {
+    background: var(--custom-bg);
+    border-color: var(--custom-divider);
+  }
+  :global(.MuiDataGrid-row) {
+    cursor: pointer;
+  }
+}

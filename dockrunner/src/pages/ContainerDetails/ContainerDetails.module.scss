@@ -1,0 +1,111 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page;
+}
+
+.back {
+  align-self: flex-start;
+  color: var(--custom-text-secondary);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+
+  &__title { font-weight: 700; display: flex; align-items: center; gap: 12px; }
+  &__meta { color: var(--custom-text-secondary); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  @media (max-width: 900px) { grid-template-columns: 1fr; }
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  &__icon {
+    @include icon-box;
+    &--primary { background: var(--custom-primary); color: var(--custom-bg); }
+  }
+}
+
+.tabsCard { overflow: hidden; }
+
+.logs {
+  background: #0b1220;
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  border-radius: 12px;
+  overflow: hidden;
+  &__toolbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    background: #111a2f;
+    border-bottom: 1px solid #1e2d4a;
+    flex-wrap: wrap;
+  }
+  &__body {
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  &__line { padding: 1px 0; }
+  &__search {
+    flex: 1;
+    min-width: 160px;
+    background: #0b1220;
+    border: 1px solid #1e2d4a;
+    border-radius: 8px;
+    color: #e2e8f0;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    outline: none;
+  }
+}
+
+.dockerPreview {
+  padding: 12px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border: 1px solid #1e293b;
+}
+
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: var(--custom-bg);
+    border: 1px solid var(--custom-divider);
+    font-size: 0.85rem;
+    &Label { color: var(--custom-text-secondary); font-weight: 600; }
+    &Value { font-family: monospace; word-break: break-all; text-align: right; }
+  }
+}
+
+.volumeList { display: flex; flex-direction: column; gap: 8px; }
+.portList { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -1,0 +1,1744 @@
+basePath: /
+definitions:
+  admin.ContainerRecord:
+    properties:
+      app_id:
+        type: string
+      app_name:
+        type: string
+      id:
+        type: string
+      image:
+        type: string
+      node_id:
+        type: string
+      owner_login:
+        type: string
+      ports:
+        items:
+          $ref: '#/definitions/admin.PortMapping'
+        type: array
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  admin.Plan:
+    properties:
+      apps:
+        type: integer
+      db_storage_gb:
+        type: number
+      domains:
+        type: integer
+      env_configs:
+        type: integer
+      id:
+        type: string
+      name:
+        type: string
+      ports:
+        type: integer
+      price:
+        type: string
+    type: object
+  admin.PortMapping:
+    properties:
+      container_port:
+        type: integer
+      host_port:
+        type: integer
+    type: object
+  agents.Agent:
+    properties:
+      api_url:
+        type: string
+      city:
+        type: string
+      containers:
+        type: integer
+      cpu_percent:
+        type: number
+      cpu_total:
+        type: integer
+      description:
+        type: string
+      disk_total_gb:
+        type: number
+      disk_used_gb:
+        type: number
+      id:
+        type: string
+      ip:
+        type: string
+      last_seen:
+        type: string
+      lat:
+        type: number
+      lng:
+        type: number
+      mem_total_gb:
+        type: number
+      mem_used_gb:
+        type: number
+      name:
+        type: string
+    type: object
+  agents.HeartbeatInput:
+    properties:
+      agent_id:
+        type: string
+      api_url:
+        type: string
+      city:
+        type: string
+      containers:
+        type: integer
+      cpu_percent:
+        type: number
+      cpu_total:
+        type: integer
+      description:
+        type: string
+      disk_total_gb:
+        type: number
+      disk_used_gb:
+        type: number
+      hostname:
+        type: string
+      ip:
+        type: string
+      lat:
+        type: number
+      lng:
+        type: number
+      mem_total_gb:
+        type: number
+      mem_used_gb:
+        type: number
+      storage:
+        items:
+          $ref: '#/definitions/agents.StorageRow'
+        type: array
+    type: object
+  agents.StorageRow:
+    properties:
+      containers_gb:
+        type: number
+      files_gb:
+        type: number
+      owner:
+        type: string
+    type: object
+  auth.LoginRequest:
+    properties:
+      login:
+        example: admin
+        type: string
+      password:
+        example: admin123
+        type: string
+    required:
+    - login
+    - password
+    type: object
+  auth.LoginResult:
+    properties:
+      access_token:
+        type: string
+      expires_at:
+        type: string
+      refresh_token:
+        type: string
+      user:
+        $ref: '#/definitions/auth.User'
+    type: object
+  auth.RefreshRequest:
+    properties:
+      refresh_token:
+        type: string
+    required:
+    - refresh_token
+    type: object
+  auth.RefreshResponse:
+    properties:
+      access_token:
+        type: string
+      refresh_token:
+        type: string
+    type: object
+  auth.RegisterRequest:
+    properties:
+      login:
+        example: admin
+        maxLength: 64
+        minLength: 3
+        type: string
+      password:
+        example: admin123
+        maxLength: 72
+        minLength: 6
+        type: string
+    required:
+    - login
+    - password
+    type: object
+  auth.User:
+    properties:
+      blocked:
+        type: boolean
+      created_at:
+        type: string
+      id:
+        type: string
+      login:
+        type: string
+      role:
+        type: string
+    type: object
+  containers.Check:
+    properties:
+      app_name:
+        type: string
+      compose_file:
+        type: string
+      detected_dockerfile:
+        type: boolean
+      error:
+        type: string
+      id:
+        type: string
+      node_id:
+        type: string
+      repo_url:
+        type: string
+      status:
+        type: string
+    type: object
+  containers.CheckRequest:
+    properties:
+      app_name:
+        example: my-awesome-app
+        type: string
+      node_id:
+        example: worker-01
+        type: string
+      repo_url:
+        example: https://github.com/org/repo
+        type: string
+    required:
+    - app_name
+    - node_id
+    - repo_url
+    type: object
+  containers.PortSpec:
+    properties:
+      container_port:
+        type: integer
+      host_port:
+        type: integer
+    type: object
+  containers.RefreshRequest:
+    properties:
+      app_name:
+        example: my-awesome-app
+        type: string
+    required:
+    - app_name
+    type: object
+  containers.RunRequest:
+    properties:
+      app_name:
+        example: my-awesome-app
+        type: string
+      container_name:
+        example: web-01
+        type: string
+      env:
+        additionalProperties:
+          type: string
+        type: object
+      image:
+        example: ""
+        type: string
+      node_id:
+        example: worker-01
+        type: string
+      ports:
+        items:
+          $ref: '#/definitions/containers.PortSpec'
+        type: array
+      repo_url:
+        example: https://github.com/org/repo
+        type: string
+      volumes:
+        items:
+          $ref: '#/definitions/containers.VolumeSpec'
+        type: array
+    required:
+    - app_name
+    - node_id
+    type: object
+  containers.VolumeSpec:
+    properties:
+      container_path:
+        type: string
+      host_path:
+        type: string
+      name:
+        type: string
+    type: object
+  envconfigs.EnvConfig:
+    properties:
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      owner_login:
+        type: string
+      updated_at:
+        type: string
+      vars:
+        items:
+          $ref: '#/definitions/envconfigs.EnvVar'
+        type: array
+    type: object
+  envconfigs.EnvConfigRequest:
+    properties:
+      description:
+        example: Переменные для прода
+        type: string
+      name:
+        example: production
+        type: string
+      vars:
+        items:
+          $ref: '#/definitions/envconfigs.EnvVar'
+        minItems: 1
+        type: array
+    required:
+    - name
+    - vars
+    type: object
+  envconfigs.EnvVar:
+    properties:
+      key:
+        type: string
+      value:
+        type: string
+    type: object
+  files.Entry:
+    properties:
+      is_dir:
+        type: boolean
+      name:
+        type: string
+      size:
+        type: integer
+    type: object
+  files.mkdirRequest:
+    properties:
+      node_id:
+        example: worker-01
+        type: string
+      path:
+        example: data/db
+        type: string
+    required:
+    - node_id
+    - path
+    type: object
+  influxdb.DailyPoint:
+    properties:
+      cpu:
+        type: number
+      day:
+        type: string
+      ram:
+        type: number
+    type: object
+  quotas.Quotas:
+    properties:
+      apps_limit:
+        type: integer
+      apps_used:
+        type: integer
+      env_limit:
+        type: integer
+      env_used:
+        type: integer
+      ports_limit:
+        type: integer
+      ports_used:
+        type: integer
+      storage_gb_limit:
+        type: number
+      storage_gb_used:
+        type: number
+    type: object
+  response.Error:
+    properties:
+      code:
+        type: string
+      error:
+        type: string
+    type: object
+  response.Success:
+    properties:
+      data: {}
+      message:
+        type: string
+      meta: {}
+    type: object
+  servers.CreateRequest:
+    properties:
+      ip:
+        example: 10.0.0.7
+        type: string
+      name:
+        example: worker-07
+        maxLength: 64
+        minLength: 2
+        type: string
+      region:
+        example: Frankfurt
+        type: string
+    required:
+    - ip
+    - name
+    - region
+    type: object
+  servers.Server:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: string
+      ip:
+        type: string
+      name:
+        type: string
+      region:
+        type: string
+      status:
+        type: string
+    type: object
+  storage.Usage:
+    properties:
+      containers_gb:
+        type: number
+      files_gb:
+        type: number
+      total_gb:
+        type: number
+    type: object
+  users.AdminCreateRequest:
+    properties:
+      login:
+        example: ivan
+        maxLength: 64
+        minLength: 3
+        type: string
+      password:
+        example: secret123
+        maxLength: 72
+        minLength: 6
+        type: string
+      plan_id:
+        enum:
+        - student
+        - basic
+        - pro
+        example: student
+        type: string
+      role:
+        enum:
+        - admin
+        - user
+        - viewer
+        example: user
+        type: string
+    required:
+    - login
+    - password
+    - plan_id
+    - role
+    type: object
+  users.BlockRequest:
+    properties:
+      blocked:
+        example: true
+        type: boolean
+    type: object
+  users.PlanRequest:
+    properties:
+      expires:
+        example: "2026-12-31"
+        type: string
+      plan_id:
+        enum:
+        - student
+        - basic
+        - pro
+        example: basic
+        type: string
+    required:
+    - plan_id
+    type: object
+  users.UpdateRoleRequest:
+    properties:
+      role:
+        enum:
+        - admin
+        - user
+        - viewer
+        example: user
+        type: string
+    required:
+    - role
+    type: object
+  users.User:
+    properties:
+      blocked:
+        type: boolean
+      created_at:
+        type: string
+      id:
+        type: string
+      login:
+        type: string
+      plan_expires:
+        type: string
+      plan_id:
+        type: string
+      role:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  volumes.CreateRequest:
+    properties:
+      container_path:
+        example: /var/lib/postgresql/data
+        type: string
+      name:
+        example: pg-data
+        type: string
+      node_id:
+        example: worker-01
+        type: string
+      size_gb:
+        example: 20
+        type: number
+    required:
+    - name
+    - node_id
+    type: object
+  volumes.Volume:
+    properties:
+      container_path:
+        type: string
+      name:
+        type: string
+      node_id:
+        type: string
+      owner_login:
+        type: string
+      size_gb:
+        type: number
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: 'Центральный API Dockrunner: пользователи, серверы, агенты, деплои
+    из Git.'
+  title: Dockrunner API
+  version: 0.1.0
+paths:
+  /api/v1/admin/containers:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/admin.ContainerRecord'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Все контейнеры кластера (админ)
+      tags:
+      - admin
+  /api/v1/admin/containers/{id}/{action}:
+    post:
+      parameters:
+      - description: ID деплоя
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Действие
+        enum:
+        - stop
+        - restart
+        in: path
+        name: action
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Старт/стоп/рестарт чужого контейнера (админ)
+      tags:
+      - admin
+  /api/v1/admin/plans:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/admin.Plan'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Тарифные планы (админ)
+      tags:
+      - admin
+  /api/v1/admin/servers/{id}/reboot:
+    post:
+      parameters:
+      - description: ID воркера
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Перезагрузить сервер (админ)
+      tags:
+      - admin
+  /api/v1/agents:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/agents.Agent'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Список воркеров с последним heartbeat
+      tags:
+      - agents
+  /api/v1/agents/heartbeat:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Bearer <agent_token>
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Метрики воркера
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/agents.HeartbeatInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Error'
+      summary: Heartbeat воркера
+      tags:
+      - agents
+  /api/v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Логин и пароль
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.LoginResult'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Error'
+        "403":
+          description: Пользователь заблокирован
+          schema:
+            $ref: '#/definitions/response.Error'
+      summary: Вход, выдача пары токенов
+      tags:
+      - auth
+  /api/v1/auth/logout:
+    post:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Выход, отзыв refresh-токена
+      tags:
+      - auth
+  /api/v1/auth/me:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.User'
+              type: object
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Error'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Текущий пользователь по токену
+      tags:
+      - auth
+  /api/v1/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Refresh-токен
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/auth.RefreshResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/response.Error'
+      summary: Обновление пары токенов (ротация)
+      tags:
+      - auth
+  /api/v1/auth/register:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Логин и пароль
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/auth.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.User'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/response.Error'
+      summary: Регистрация пользователя
+      tags:
+      - auth
+  /api/v1/containers/{id}/logs:
+    get:
+      parameters:
+      - description: ID контейнера
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 200
+        description: Число строк
+        in: query
+        name: tail
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  type: string
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Хвост логов контейнера через воркер
+      tags:
+      - containers
+  /api/v1/containers/{id}/spec:
+    get:
+      parameters:
+      - description: ID контейнера
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Полные параметры контейнера с воркера
+      tags:
+      - containers
+  /api/v1/containers/check:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Приложение, репозиторий, узел
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/containers.CheckRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/containers.Check'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Проверка репозитория на воркере
+      tags:
+      - containers
+  /api/v1/containers/check/{id}:
+    get:
+      parameters:
+      - description: ID проверки
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/containers.Check'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Статус проверки для опроса
+      tags:
+      - containers
+  /api/v1/containers/mine:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/admin.ContainerRecord'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Мои контейнеры
+      tags:
+      - containers
+  /api/v1/containers/refresh:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Имя приложения
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/containers.RefreshRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/response.Success'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: 'Обновить контейнер: свежий pull, пересборка, старт'
+      tags:
+      - containers
+  /api/v1/containers/run:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Имя, образ или репозиторий, порты, пути, env
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/containers.RunRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/response.Success'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Запустить контейнер в стиле docker run
+      tags:
+      - containers
+  /api/v1/env-configs:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/envconfigs.EnvConfig'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Мои env-конфиги
+      tags:
+      - env-configs
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Название и переменные
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/envconfigs.EnvConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/envconfigs.EnvConfig'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Создать env-конфиг (до 10)
+      tags:
+      - env-configs
+  /api/v1/env-configs/{id}:
+    delete:
+      parameters:
+      - description: ID конфига
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Удалить env-конфиг
+      tags:
+      - env-configs
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID конфига
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Название и переменные
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/envconfigs.EnvConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/envconfigs.EnvConfig'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Обновить env-конфиг
+      tags:
+      - env-configs
+  /api/v1/files:
+    delete:
+      parameters:
+      - description: ID воркера
+        in: query
+        name: node
+        required: true
+        type: string
+      - description: Путь внутри папки пользователя
+        in: query
+        name: path
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Удалить файл или папку из директории пользователя
+      tags:
+      - files
+    get:
+      parameters:
+      - description: ID воркера
+        in: query
+        name: node
+        required: true
+        type: string
+      - default: /
+        description: Путь внутри папки пользователя
+        in: query
+        name: path
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/files.Entry'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Список файлов в папке пользователя на воркере
+      tags:
+      - files
+  /api/v1/files/download:
+    get:
+      parameters:
+      - description: ID воркера
+        in: query
+        name: node
+        required: true
+        type: string
+      - description: Путь внутри папки пользователя
+        in: query
+        name: path
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+      security:
+      - BearerAuth: []
+      summary: Скачать файл из папки пользователя
+      tags:
+      - files
+  /api/v1/files/mkdir:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Воркер и путь
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/files.mkdirRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Создать папку в директории пользователя
+      tags:
+      - files
+  /api/v1/files/upload:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: ID воркера
+        in: formData
+        name: node_id
+        required: true
+        type: string
+      - description: Путь внутри папки пользователя
+        in: formData
+        name: path
+        required: true
+        type: string
+      - description: Файл (до 20 МБ)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Загрузить файл (заменяет существующий)
+      tags:
+      - files
+  /api/v1/overview/resources:
+    get:
+      parameters:
+      - default: 14
+        description: Число дней
+        in: query
+        name: days
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/influxdb.DailyPoint'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Среднесуточная загрузка CPU/RAM кластера
+      tags:
+      - overview
+  /api/v1/quotas:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/quotas.Quotas'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: 'Мои лимиты: использовано и лимиты тарифа'
+      tags:
+      - quotas
+  /api/v1/servers:
+    get:
+      parameters:
+      - default: 1
+        description: Страница
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Размер страницы
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/servers.Server'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Список серверов
+      tags:
+      - servers
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Данные сервера
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/servers.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/servers.Server'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Добавить сервер
+      tags:
+      - servers
+  /api/v1/servers/{id}:
+    delete:
+      parameters:
+      - description: ID сервера
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Удалён
+      security:
+      - BearerAuth: []
+      summary: Удалить сервер
+      tags:
+      - servers
+    get:
+      parameters:
+      - description: ID сервера
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/servers.Server'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Сервер по id
+      tags:
+      - servers
+  /api/v1/storage/usage:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/storage.Usage'
+              type: object
+      security:
+      - BearerAuth: []
+      summary: 'Занятое место пользователя: контейнеры + личные папки'
+      tags:
+      - storage
+  /api/v1/users:
+    get:
+      parameters:
+      - default: 1
+        description: Страница
+        in: query
+        name: page
+        type: integer
+      - default: 20
+        description: Размер страницы
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/users.User'
+                  type: array
+              type: object
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Список пользователей (админ)
+      tags:
+      - users
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Данные пользователя
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/users.AdminCreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/users.User'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Создать пользователя (админ)
+      tags:
+      - users
+  /api/v1/users/{id}:
+    delete:
+      parameters:
+      - description: ID пользователя
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Удалён
+      security:
+      - BearerAuth: []
+      summary: Удалить пользователя (админ)
+      tags:
+      - users
+    get:
+      parameters:
+      - description: ID пользователя
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/users.User'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Пользователь по id
+      tags:
+      - users
+  /api/v1/users/{id}/block:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID пользователя
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Флаг блокировки
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/users.BlockRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Заблокировать / разблокировать (админ)
+      tags:
+      - users
+  /api/v1/users/{id}/plan:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID пользователя
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Тариф и дата окончания (пусто — бессрочно)
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/users.PlanRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Сменить тариф и срок (админ)
+      tags:
+      - users
+  /api/v1/users/{id}/role:
+    patch:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID пользователя
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Новая роль
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/users.UpdateRoleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Сменить роль (админ)
+      tags:
+      - users
+  /api/v1/volumes:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/volumes.Volume'
+                  type: array
+              type: object
+      security:
+      - BearerAuth: []
+      summary: Мои тома
+      tags:
+      - volumes
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Название, узел, размер
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/volumes.CreateRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/response.Success'
+            - properties:
+                data:
+                  $ref: '#/definitions/volumes.Volume'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/response.Error'
+      security:
+      - BearerAuth: []
+      summary: Создать том
+      tags:
+      - volumes
+  /api/v1/volumes/{name}:
+    delete:
+      parameters:
+      - description: Имя тома
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: ID воркера
+        in: query
+        name: node
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/response.Success'
+      security:
+      - BearerAuth: []
+      summary: Удалить том с воркера
+      tags:
+      - volumes
+securityDefinitions:
+  BearerAuth:
+    description: Bearer <access_token>. Токен выдаёт POST /api/v1/auth/login
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

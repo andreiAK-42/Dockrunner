@@ -1,0 +1,69 @@
+@use '../styles/variables' as *;
+@use '../styles/mixins' as *;
+
+.wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  position: relative;
+  background: var(--custom-bg);
+  border-radius: $radius-md;
+}
+
+.controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--custom-paper);
+  border-radius: 10px;
+  border: 1px solid var(--custom-divider);
+  padding: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1);
+
+  &__divider {
+    height: 1px;
+    background: var(--custom-divider);
+    margin: 2px 0;
+  }
+
+  &__btn {
+    width: 30px !important;
+    height: 30px !important;
+  }
+}
+
+.hint {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--custom-paper);
+  border-radius: 6px;
+  border: 1px solid var(--custom-divider);
+  padding: 4px 8px;
+  opacity: .9;
+
+  &__text {
+    font-size: 0.7rem;
+    color: var(--custom-text-secondary);
+  }
+
+  &__zoom {
+    font-size: 0.65rem;
+    font-weight: 700;
+    margin-left: 4px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--custom-divider) 60%, transparent);
+  }
+}

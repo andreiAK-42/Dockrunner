@@ -1,0 +1,56 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page-narrow(1000px);
+}
+
+.header {
+  &__title {
+    @include section-title;
+  }
+}
+
+.grid {
+  @include card-grid-2;
+}
+
+.dbIcon {
+  @include icon-box(44px);
+  background: var(--custom-primary);
+  color: var(--custom-bg);
+}
+
+.creds {
+  border: 1px solid var(--custom-divider);
+  border-radius: 12px;
+  overflow: hidden;
+
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--custom-divider);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+}
+
+.conn {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--custom-bg);
+  border: 1px solid var(--custom-divider);
+
+  &__row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+  }
+}

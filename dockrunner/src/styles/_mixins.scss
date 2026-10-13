@@ -1,0 +1,86 @@
+@use 'variables' as *;
+
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@mixin card {
+  background: var(--custom-paper);
+  border: 1px solid var(--custom-divider);
+  border-radius: var(--custom-radius);
+}
+
+@mixin container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  width: 100%;
+  @media (max-width: 640px) {
+    padding: 0 16px;
+  }
+}
+
+@mixin text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@mixin page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+@mixin page-narrow($max-width: 1000px) {
+  @include page;
+  max-width: $max-width;
+  margin: 0 auto;
+}
+
+@mixin section-title {
+  font-weight: 700;
+}
+
+@mixin page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+@mixin icon-box($size: 40px, $radius: 12px) {
+  width: $size;
+  height: $size;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: $radius;
+}
+
+@mixin event-row {
+  display: flex;
+  gap: 16px;
+  padding: 12px;
+  background: var(--custom-bg);
+  border-radius: 12px;
+  border: 1px solid var(--custom-divider);
+}
+
+@mixin stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  @media (max-width: $breakpoint-sm) { grid-template-columns: 1fr; }
+}
+
+@mixin card-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  @media (max-width: 800px) { grid-template-columns: 1fr; }
+}

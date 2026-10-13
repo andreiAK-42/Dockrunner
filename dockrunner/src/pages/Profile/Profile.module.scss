@@ -1,0 +1,16 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page-narrow(900px);
+}
+
+.header {
+  &__title {
+    @include section-title;
+  }
+}
+
+.grid {
+  @include card-grid-2;
+}

@@ -1,0 +1,58 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.card {
+  width: 440px;
+  max-width: 100%;
+
+  &__content {
+    padding: 32px;
+  }
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+
+  &__logo {
+    @include icon-box(48px);
+    background: var(--custom-primary);
+    color: var(--custom-bg);
+  }
+
+  &__title {
+    font-weight: 700;
+    font-size: 1.5rem;
+  }
+
+  &__subtitle {
+    text-align: center;
+    color: var(--custom-text-secondary);
+    font-size: 0.875rem;
+  }
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.alert {
+  margin-bottom: 16px;
+}
+
+.submitBtn {
+  margin-top: 8px;
+}

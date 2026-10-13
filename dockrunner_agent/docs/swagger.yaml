@@ -1,0 +1,157 @@
+basePath: /
+definitions:
+  api.ContainerItem:
+    properties:
+      app_name:
+        example: frontend-web
+        type: string
+      container:
+        example: a1b2c3d4e5f6
+        type: string
+      id:
+        example: dep-1048
+        type: string
+      image:
+        example: nginx:1.27
+        type: string
+      live_status:
+        example: running
+        type: string
+      stored_status:
+        example: running
+        type: string
+    type: object
+  api.ContainersResponse:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/api.ContainerItem'
+        type: array
+    type: object
+  api.ErrorResponse:
+    properties:
+      error:
+        example: deployment not found
+        type: string
+    type: object
+  api.HealthResponse:
+    properties:
+      agent_id:
+        example: worker-01
+        type: string
+      status:
+        example: ok
+        type: string
+      version:
+        example: 0.1.0
+        type: string
+    type: object
+  api.LogsResponse:
+    properties:
+      data:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: 'HTTP API воркера: контейнеры, хвост логов, WebSocket-стрим. Задачи
+    принимает по RabbitMQ.'
+  title: Dockrunner Agent API
+  version: 0.1.0
+paths:
+  /containers:
+    get:
+      parameters:
+      - description: Bearer <agent_token> (или ?token= в query)
+        in: header
+        name: Authorization
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ContainersResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Контейнеры воркера (из SQLite + живой статус)
+      tags:
+      - agent
+  /containers/{id}/logs:
+    get:
+      parameters:
+      - description: Bearer <agent_token> (или ?token= в query)
+        in: header
+        name: Authorization
+        type: string
+      - description: ID деплоя
+        in: path
+        name: id
+        required: true
+        type: string
+      - default: 200
+        description: Число строк
+        in: query
+        name: tail
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.LogsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Хвост логов контейнера
+      tags:
+      - agent
+  /containers/{id}/logs/stream:
+    get:
+      description: Сначала отдаёт историю (200 строк), затем живые сообщения {stream,
+        line, time}. Токен — в ?token=, заголовок в браузере не поставить.
+      parameters:
+      - description: ID деплоя
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Токен агента
+        in: query
+        name: token
+        type: string
+      responses:
+        "101":
+          description: Переключение на WebSocket
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      summary: Живые логи по WebSocket
+      tags:
+      - agent
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HealthResponse'
+      summary: Проверка живости агента
+      tags:
+      - agent
+swagger: "2.0"

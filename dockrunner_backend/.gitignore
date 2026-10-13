@@ -1,0 +1,26 @@
+# Binaries
+/backend
+/backend.exe
+*.exe
+*.out
+
+# Env (keep .env.example)
+/.env
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# Local runtime data
+data/
+tmp/
+
+# Go test/coverage artifacts
+coverage.out
+coverage.html
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

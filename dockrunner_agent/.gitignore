@@ -1,0 +1,24 @@
+# Binaries
+/agent
+/agent.exe
+*.exe
+*.out
+
+# Env (keep .env.example)
+/.env
+!.env.example
+
+# Local runtime data: sqlite + cloned projects
+data/
+workspace/
+*.db
+*.db-journal
+
+# Logs
+logs/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

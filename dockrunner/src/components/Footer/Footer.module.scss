@@ -1,0 +1,73 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.footer {
+  border-top: 1px solid var(--custom-divider);
+  background: var(--custom-paper);
+  margin-top: auto;
+
+  &__inner {
+    @include container;
+    padding-top: 20px;
+    padding-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+
+    @media (max-width: 900px) {
+      flex-direction: column;
+      text-align: center;
+    }
+  }
+
+  &__brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  &__logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--custom-primary);
+    color: var(--custom-bg);
+    @include flex-center;
+    flex-shrink: 0;
+  }
+
+  &__version {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--custom-text-secondary);
+    background: color-mix(in srgb, var(--custom-divider) 55%, transparent);
+    padding: 4px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  &__links {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  &__dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--custom-divider);
+    flex-shrink: 0;
+  }
+
+  &__copy {
+    font-size: 0.75rem;
+    color: var(--custom-text-secondary);
+    white-space: nowrap;
+  }
+}

@@ -1,0 +1,78 @@
+@use '../../styles/variables' as *;
+@use '../../styles/mixins' as *;
+
+.page {
+  @include page;
+}
+
+.backButton {
+  align-self: flex-start;
+  color: var(--custom-text-secondary);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+
+  &__title {
+    @include section-title;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__meta {
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 8px;
+  }
+}
+
+.grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  @media (max-width: $breakpoint-md) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.statIcon {
+  @include icon-box;
+
+  &--primary { background: var(--custom-primary); color: var(--custom-bg); }
+  &--success { background: #10b981; color: #fff; }
+  &--info { background: #0ea5e9; color: #fff; }
+}
+
+.resourceRow {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.resourceBar {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.event {
+  @include event-row;
+
+  &__time {
+    min-width: 90px;
+    font-size: 0.75rem;
+    color: var(--custom-text-secondary);
+  }
+}
