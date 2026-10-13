@@ -6,48 +6,6 @@
 # Пересборка фронта с другим API: VITE_API_URL=https://api.example.com docker compose up -d --build frontend
 
 services:
-  postgres:
-    image: postgres:16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: dockrunner
-      POSTGRES_PASSWORD: dockrunner
-      POSTGRES_DB: dockrunner
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dockrunner"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  rabbitmq:
-    image: rabbitmq:3-management
-    restart: unless-stopped
-    environment:
-      RABBITMQ_DEFAULT_USER: dockrunner
-      RABBITMQ_DEFAULT_PASS: dockrunner
-    volumes:
-      - rabbitdata:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  influxdb:
-    image: influxdb:2
-    restart: unless-stopped
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: dockrunner
-      DOCKER_INFLUXDB_INIT_PASSWORD: dockrunner-influx-pass
-      DOCKER_INFLUXDB_INIT_ORG: dockrunner
-      DOCKER_INFLUXDB_INIT_BUCKET: metrics
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dockrunner-influx-token
-    volumes:
-      - influxdata:/var/lib/influxdb2
-
   backend:
     build: ./dockrunner_backend
     restart: unless-stopped
@@ -69,11 +27,6 @@ services:
       CORS_ALLOWED_ORIGINS: http://localhost,http://localhost:5173
       PORTS_MIN: 3000
       PORTS_MAX: 4000
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
 
   frontend:
     build:
@@ -85,8 +38,3 @@ services:
       - "80:80"
     depends_on:
       - backend
-
-volumes:
-  pgdata:
-  rabbitdata:
-  influxdata:
