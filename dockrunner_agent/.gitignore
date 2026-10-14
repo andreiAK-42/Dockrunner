@@ -15,7 +15,6 @@ workspace/
 *.db-journal
 
 # Logs
-logs/
 *.log
 
 # Editor / OS
