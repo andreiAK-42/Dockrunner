@@ -13,8 +13,7 @@ import { checkRepository, fetchCheck } from '../../api/containers'
 import type { CheckStatus } from '../../api/containers'
 import { ApiError } from '../../api/client'
 import { fetchQuotas } from '../../api/quotas'
-import { createDeploymentRequest, fetchDeploymentRequest } from '../../api/deploymentRequests'
-import type { DeploymentRequest } from '../../api/deploymentRequests'
+import { createDeploymentRequest } from '../../api/deploymentRequests'
 import { fetchPricing } from '../../api/admin'
 import type { PricingRate } from '../../api/admin'
 import styles from './CreateApplication.module.scss'
@@ -53,16 +52,28 @@ const MAX_PORT_NUMBER = 65535
 const CANCELLED_MESSAGE = 'cancelled'
 const SUGGEST_PORTS_COUNT = 10
 
-function randomFreePorts(count: number, min: number, max: number, taken: Set<number>): number[] {
+function mulberry32(seed: number) {
+  let state = seed >>> 0
+  return () => {
+    state |= 0
+    state = (state + 0x6d2b79f5) | 0
+    let t = Math.imul(state ^ (state >>> 15), 1 | state)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function randomFreePorts(count: number, min: number, max: number, taken: Set<number>, seed: number): number[] {
   const picked: number[] = []
   const range = max - min + 1
   if (range <= 0 || count <= 0) {
     return picked
   }
+  const rand = mulberry32(seed)
   let guard = 0
   while (picked.length < count && guard < count * 50 + 200) {
     guard += 1
-    const port = min + Math.floor(Math.random() * range)
+    const port = min + Math.floor(rand() * range)
     if (taken.has(port) || picked.includes(port)) {
       continue
     }
@@ -242,7 +253,7 @@ export default function CreateApplication() {
   const { nodes } = useAgents()
   const { ports: busyPorts, freeCount } = usePorts()
   const [portsRange, setPortsRange] = useState({ min: DEFAULT_PORTS_MIN, max: DEFAULT_PORTS_MAX })
-  const [suggestions, setSuggestions] = useState<number[]>([])
+  const [suggestionSeed, setSuggestionSeed] = useState(0)
 
   useEffect(() => {
     fetchQuotas()
@@ -265,7 +276,9 @@ export default function CreateApplication() {
   }
   const isReady = check?.status === 'ready'
 
-  const regenerateSuggestions = () => {
+  // Варианты хост-портов: случайные свободные на узле, не более лимита.
+  // Пересчитываются при смене узла/лимита/выбора и по кнопке «Другие варианты».
+  const suggestions = useMemo(() => {
     const busyOnNode = new Set(
       busyPorts.filter((busy) => busy.nodeId === effectiveNodeId).map((busy) => busy.port),
     )
@@ -274,13 +287,12 @@ export default function CreateApplication() {
     )
     const taken = new Set([...busyOnNode, ...selectedHosts])
     const count = Math.min(SUGGEST_PORTS_COUNT, Math.max(0, freeCount))
-    setSuggestions(randomFreePorts(count, portsRange.min, portsRange.max, taken))
-  }
+    return randomFreePorts(count, portsRange.min, portsRange.max, taken, suggestionSeed + portsRange.min * 31 + portsRange.max)
+  }, [effectiveNodeId, busyPorts, ports, freeCount, portsRange, suggestionSeed])
 
-  useEffect(() => {
-    regenerateSuggestions()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveNodeId, freeCount, portsRange.min, portsRange.max])
+  const regenerateSuggestions = () => {
+    setSuggestionSeed((seed) => seed + 1)
+  }
   const composeServices = useMemo(() => {
     if (!check || check.status !== 'ready' || !check.compose_file) {
       return []
@@ -575,7 +587,7 @@ export default function CreateApplication() {
                     ...ports.map((row) => parsePort(row.host)).filter((port): port is number => port !== null),
                     ...suggestions,
                   ])
-                  const [next] = randomFreePorts(1, portsRange.min, portsRange.max, usedHosts)
+                  const [next] = randomFreePorts(1, portsRange.min, portsRange.max, usedHosts, Date.now())
                   setPorts([...ports, { host: next !== undefined ? String(next) : '', container: '' }])
                 }} sx={{ alignSelf: 'flex-start' }}>Добавить порт</Button>
                 <Button variant="outlined" size="small" startIcon={<RefreshCw size={14} />} onClick={regenerateSuggestions} sx={{ alignSelf: 'flex-start' }}>Другие варианты</Button>

@@ -85,7 +85,7 @@ export default function Landing() {
         <div className={styles.hero}>
           <div className={styles.hero__overline}>Просто. Быстро. Надёжно.</div>
           <h2 className={styles.hero__title}>Сервис для запуска <span>ИТ-проектов</span>  без боли</h2>
-          <p className={styles.hero__subtitle}>Dockrunner — это CI/CD сервис, для тестирования и развёртки студенческих ИТ-проектов. Загрузите образ и тестируйте ваши приложения.</p>
+          <p className={styles.hero__subtitle}>Dockrunner - это CI/CD сервис, для тестирования и развёртки студенческих ИТ-проектов. Укажите ссылку на ваш репозиторий и сервис развернёт ваше приложение.</p>
           <div className={styles.hero__cta}>
             <Button size="large" variant="contained" endIcon={<ArrowRight size={18} />} onClick={() => navigate(isAuthenticated ? '/dashboard' : '/login')}>
               {isAuthenticated ? 'Перейти в кабинет' : 'Начать бесплатно'}
@@ -98,9 +98,9 @@ export default function Landing() {
 
         <div className={styles.infoGrid}>
           {[
-            { icon: <ShieldCheck size={20} />, title: 'Безопасность по умолчанию', text: 'Изоляция по серверам, выдача сертификатов. Шифрование ваших файлов с секретами.' },
+            { icon: <ShieldCheck size={20} />, title: 'Безопасность', text: 'Изоляция по серверам, раздельные хранилища и различные методы безопасности.' },
             { icon: <Cpu size={20} />, title: 'Экономия ресурсов', text: 'Планировщик учитывает реальную загрузку CPU/RAM/Disk и подбирает сервер с запасом.' },
-            { icon: <Layers size={20} />, title: 'Подходит всем', text: 'Достаточно только иметь в своём проекте рабочий Dockerfile, остальное сделают наши системы.' },
+            { icon: <Layers size={20} />, title: 'Подходит всем', text: 'Достаточно только иметь в своём проекте рабочий Dockerfile или docker compose, остальное сделает наша система.' },
           ].map((b) => (
             <Card key={b.title} variant="outlined">
               <CardContent sx={{ p: 2.5 }}>

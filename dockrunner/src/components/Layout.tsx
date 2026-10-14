@@ -40,11 +40,11 @@ const DRAWER_WIDTH = 240
 
 const NAVIGATION = [
   { text: 'Статистика', icon: <LayoutDashboard size={20} />, path: '/dashboard' },
+  { text: 'Документация', icon: <BookOpen size={20} />, path: '/docs' },
   { text: 'Приложения', icon: <BoxIcon size={20} />, path: '/applications' },
   { text: 'Конфигурации .env', icon: <FileCode2 size={20} />, path: '/env-configs' },
-  { text: 'Базы данных', icon: <Database size={20} />, path: '/databases' },
+ // { text: 'Базы данных', icon: <Database size={20} />, path: '/databases' },
   { text: 'Файлы', icon: <FolderOpen size={20} />, path: '/files' },
-  { text: 'Документация', icon: <BookOpen size={20} />, path: '/docs' },
   { text: 'Персонализация', icon: <Palette size={20} />, path: '/appearance' },
   { text: 'Профиль', icon: <User size={20} />, path: '/profile' },
   { text: 'Администрирование', icon: <ShieldCheck size={20} />, path: '/admin' },

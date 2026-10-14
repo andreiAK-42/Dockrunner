@@ -134,7 +134,7 @@ export default function Dashboard() {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="h6" sx={{ mb: 0.5, fontWeight: 600 }}>Использование ресурсов кластера</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Среднесуточная загрузка всех серверов за 14 дней — общая, не только ваши контейнеры</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Среднесуточная загрузка всех серверов за 14 дней</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Моё сейчас: {containers.length} конт. · CPU {myCpu.toFixed(1)} ядер · RAM {myRam.toFixed(1)} ГБ</Typography>
               {resources.length === 0 ? (
                 <Typography color="text.secondary">Пока нет данных — метрики появятся после первых heartbeat воркеров.</Typography>

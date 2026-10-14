@@ -123,7 +123,6 @@ export default function Docs() {
           <div className={styles.header__brand} onClick={() => navigate('/')}>
             <div className={styles.header__logo}><Server size={16} /></div>
             <span style={{ fontWeight: 800 }}>Dockrunner</span>
-            <span style={{ marginLeft: 8, fontSize: '.7rem', opacity: .6, display: 'flex', alignItems: 'center', gap: 4 }}><BookOpen size={12} /> Docs</span>
           </div>
           <Button size="small" startIcon={<ArrowLeft size={14} />} onClick={() => navigate(-1)}>Назад</Button>
         </div>
@@ -137,9 +136,6 @@ export default function Docs() {
               <div key={doc.id} onClick={() => setActive(doc.id)} className={`${styles.sidebar__item} ${active === doc.id ? styles['sidebar__item--active'] : ''}`}>{doc.title}</div>
             ))}
           </div>
-          <Box sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider', mt: 1 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}><ImageIcon size={12} /> Скриншоты — заглушки, замените на реальные PNG в <code>public/docs/screenshots/</code></Typography>
-          </Box>
         </aside>
 
         <main className={styles.content}>
@@ -147,9 +143,6 @@ export default function Docs() {
             {loading ? <div className={styles.loading}>Загрузка {activeDoc.file}...</div> : (
               <div dangerouslySetInnerHTML={{ __html: content }} />
             )}
-            <Box sx={{ mt: 3, p: 1.5, borderRadius: 2, bgcolor: 'background.default', border: '1px solid', borderColor: 'divider' }}>
-              <Typography variant="caption" color="text.secondary">Документация подтягивается из <code>public/docs/*.md</code> через <code>fetch()</code>. Добавьте новые <code>.md</code> файлы и пропишите их в массиве <code>DOCS</code> в <code>src/pages/Docs/index.tsx</code>.</Typography>
-            </Box>
           </div>
         </main>
       </div>
