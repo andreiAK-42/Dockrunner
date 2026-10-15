@@ -24,13 +24,13 @@ export default function PricingTab({ rates, nodes, onChanged, onError }: Pricing
   const openPricingDialog = (agent?: PricingRate) => {
     if (agent) {
       setPricingIsNew(false)
-      setPricingAgentId(agent.agentId)
-      setPricingCpu(agent.cpuPerCoreHour)
-      setPricingMem(agent.memPerGbHour)
-      setPricingDisk(agent.diskPerGbHour)
+      setPricingAgentId(agent.agent_id)
+      setPricingCpu(agent.cpu_per_core_hour)
+      setPricingMem(agent.mem_per_gb_hour)
+      setPricingDisk(agent.disk_per_gb_hour)
     } else {
       setPricingIsNew(true)
-      const withoutPricing = nodes.find((n) => !rates.some((p) => p.agentId === n.id))
+      const withoutPricing = nodes.find((n) => !rates.some((p) => p.agent_id === n.id))
       setPricingAgentId(withoutPricing?.id || nodes[0]?.id || '')
       setPricingCpu(0)
       setPricingMem(0)
@@ -41,7 +41,7 @@ export default function PricingTab({ rates, nodes, onChanged, onError }: Pricing
 
   const handleSavePricing = () => {
     if (!pricingAgentId.trim()) return
-    setPricing({ agentId: pricingAgentId, cpuPerCoreHour: pricingCpu, memPerGbHour: pricingMem, diskPerGbHour: pricingDisk })
+    setPricing({ agent_id: pricingAgentId, cpu_per_core_hour: pricingCpu, mem_per_gb_hour: pricingMem, disk_per_gb_hour: pricingDisk })
       .then(() => {
         setPricingOpen(false)
         onChanged()
@@ -72,12 +72,12 @@ export default function PricingTab({ rates, nodes, onChanged, onError }: Pricing
               </TableHead>
               <TableBody>
                 {rates.map((p) => (
-                  <TableRow key={p.agentId} hover>
-                    <TableCell>{p.agentId}</TableCell>
-                    <TableCell>{p.cpuPerCoreHour} руб</TableCell>
-                    <TableCell>{p.memPerGbHour} руб</TableCell>
-                    <TableCell>{p.diskPerGbHour} руб</TableCell>
-                    <TableCell>{new Date(p.updatedAt).toLocaleString('ru-RU')}</TableCell>
+                  <TableRow key={p.agent_id} hover>
+                    <TableCell>{p.agent_id}</TableCell>
+                    <TableCell>{p.cpu_per_core_hour} руб</TableCell>
+                    <TableCell>{p.mem_per_gb_hour} руб</TableCell>
+                    <TableCell>{p.disk_per_gb_hour} руб</TableCell>
+                    <TableCell>{new Date(p.updated_at).toLocaleString('ru-RU')}</TableCell>
                     <TableCell>
                       <Button size="small" startIcon={<Settings size={14} />} onClick={() => openPricingDialog(p)}>Изменить</Button>
                     </TableCell>

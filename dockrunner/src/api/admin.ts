@@ -63,11 +63,11 @@ export interface DeploymentRequest {
 }
 
 export interface PricingRate {
-  agentId: string
-  cpuPerCoreHour: number
-  memPerGbHour: number
-  diskPerGbHour: number
-  updatedAt: string
+  agent_id: string
+  cpu_per_core_hour: number
+  mem_per_gb_hour: number
+  disk_per_gb_hour: number
+  updated_at: string
 }
 
 export interface BalanceTransaction {
@@ -188,7 +188,7 @@ export async function fetchPricing(): Promise<PricingRate[]> {
   return res.data
 }
 
-export function setPricing(payload: { agentId: string; cpuPerCoreHour: number; memPerGbHour: number; diskPerGbHour: number }) {
+export function setPricing(payload: { agent_id: string; cpu_per_core_hour: number; mem_per_gb_hour: number; disk_per_gb_hour: number }) {
   return apiRequest('/api/v1/admin/pricing', {
     method: 'PUT',
     body: payload,

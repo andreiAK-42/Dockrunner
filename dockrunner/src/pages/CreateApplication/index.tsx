@@ -301,11 +301,11 @@ export default function CreateApplication() {
   }, [check])
   const serviceCount = composeServices.length > 0 ? composeServices.length : 1
   const priceEstimate = useMemo(() => {
-    const rate = rates.find((r) => r.agentId === effectiveNodeId)
+    const rate = rates.find((r) => r.agent_id === effectiveNodeId)
     if (!rate) {
       return null
     }
-    const hourly = cpuCores * rate.cpuPerCoreHour + memoryGB * rate.memPerGbHour + diskGB * rate.diskPerGbHour
+    const hourly = cpuCores * rate.cpu_per_core_hour + memoryGB * rate.mem_per_gb_hour + diskGB * rate.disk_per_gb_hour
     return Math.round(hourly * durationHours * serviceCount * 100) / 100
   }, [rates, effectiveNodeId, cpuCores, memoryGB, diskGB, durationHours, serviceCount])
 

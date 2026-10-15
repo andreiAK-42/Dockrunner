@@ -7,8 +7,8 @@ import styles from './Docs.module.scss'
 
 const DOCS = [
   { id: 'intro', title: 'Введение', file: '/docs/intro.md' },
-  { id: 'quickstart', title: 'Быстрый старт', file: '/docs/quickstart.md' },
-  { id: 'deploy', title: 'Деплой и обновления', file: '/docs/deploy.md' },
+  { id: 'base', title: 'Немного базы', file: '/docs/base.md' },
+  { id: 'quickstart', title: 'Быстрый старт', file: '/docs/quickstart.md' }
 ]
 
 function escapeHtml(source: string) {
