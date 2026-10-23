@@ -1,0 +1,3 @@
+[submodule "dockrunner_agent_cpp/modules/spdlog"]
+	path = dockrunner_agent_cpp/modules/spdlog
+	url = https://github.com/gabime/spdlog
