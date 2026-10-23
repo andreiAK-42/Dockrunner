@@ -1,9 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Box, Button, Card, CardContent, Stack, Typography, Chip, Tabs, Tab, Divider, IconButton, TextField, MenuItem, Select, FormControl, InputLabel } from '@mui/material'
-import { ArrowLeft, Play, Square, RotateCcw, Terminal, Copy, Download, Trash2, HardDrive, Globe, Box as BoxIcon } from 'lucide-react'
-import { getContainerById } from '../../types/container'
-import type { ContainerVolume, Container } from '../../types/container'
+import { Box, Button, Card, CardContent, Stack, Typography, Chip, Tabs, Tab, Divider, IconButton, TextField, MenuItem, Select, FormControl, InputLabel, Alert } from '@mui/material'
+import { ArrowLeft, Play, Square, RotateCcw, Terminal, Copy, Download, Trash2, HardDrive, Globe, Box as BoxIcon, ExternalLink } from 'lucide-react'
+import { fetchMine, fetchContainerSpec, fetchContainerLogs, startContainer, stopContainer, removeContainer, fetchBuildLog, type MineContainer, type ContainerSpec } from '../../api/containers'
 import { copyText } from '../../utils/clipboard'
 import { useEnvConfigs } from '../../hooks/useEnvConfigs'
 import { toDockerEnvArgs } from '../../types/envConfig'
@@ -20,27 +19,21 @@ function filterLogsBySearch(logs: string[], search: string): string[] {
   return logs.filter((line) => line.toLowerCase().includes(query))
 }
 
-function buildInlineEnvArgs(container: Container): string {
-  const args = container.env.map((envVar) => `--env ${envVar.key}="${envVar.value}"`)
+function buildInlineEnvArgs(env: Record<string, string>): string {
+  const args = Object.entries(env).map(([key, value]) => `--env ${key}="${value}"`)
   return args.join(' ')
 }
 
-function buildDockerCommand(container: Container, volumes: ContainerVolume[], selectedEnv: EnvConfig | undefined): string {
-  const portArgs = container.ports.map((port) => `-p ${port.hostPort}:${port.containerPort}/${port.protocol}`).join(' ')
-  const volumeArgs = volumes.map((volume) => `-v ${volume.name}:${volume.mountPath}`).join(' ')
+function buildDockerCommand(spec: ContainerSpec, selectedEnv: EnvConfig | undefined): string {
+  const portArgs = spec.ports.map((port) => `-p ${port.host}:${port.container}`).join(' ')
+  const volumeArgs = spec.volumes.map((volume) => `-v ${volume.name || volume.host_path}:${volume.container_path}`).join(' ')
 
-  let envArgs = buildInlineEnvArgs(container)
+  let envArgs = buildInlineEnvArgs(spec.env)
   if (selectedEnv) {
     envArgs = toDockerEnvArgs(selectedEnv)
   }
 
-  let restartArg = ''
-  if (container.restartPolicy !== 'no') {
-    restartArg = `--restart ${container.restartPolicy}`
-  }
-
-  const command = container.command || ''
-  const fullCommand = `docker run -d --name ${container.name} ${portArgs} ${volumeArgs} ${envArgs} ${restartArg} ${container.image} ${command}`
+  const fullCommand = `docker run -d --name ${spec.name} ${portArgs} ${volumeArgs} ${envArgs} ${spec.image}`
 
   return fullCommand.replace(/\s+/g, ' ').trim()
 }
@@ -65,67 +58,203 @@ function getStatusColor(status: string): 'success' | 'error' | 'default' {
   return 'default'
 }
 
+function getAppUrl(nodeId: string, ports: { host: number; container: number }[]): string | null {
+  if (ports.length === 0) return null
+  const port = ports[0].host
+  return `http://${nodeId}:${port}`
+}
+
 export default function ContainerDetails() {
   const { id, containerId } = useParams()
   const realId = containerId || id
   const navigate = useNavigate()
-  const container = getContainerById(realId || '')
   const { configs } = useEnvConfigs()
 
   const [tab, setTab] = useState(0)
   const [follow, setFollow] = useState(true)
   const [search, setSearch] = useState('')
   const [envConfigId, setEnvConfigId] = useState('')
-  const [volumes, setVolumes] = useState<ContainerVolume[]>([])
+  const [volumes, setVolumes] = useState<Array<{ id: string; name: string; mountPath: string; sizeGB: number; readOnly?: boolean }>>([])
   const [volumesFor, setVolumesFor] = useState<string | undefined>(undefined)
   const [newVolName, setNewVolName] = useState('')
   const [newVolPath, setNewVolPath] = useState('')
+  const [record, setRecord] = useState<MineContainer | null>(null)
+  const [spec, setSpec] = useState<ContainerSpec | null>(null)
+  const [logs, setLogs] = useState<string[] | null>(null)
+  const [logsLoadedFor, setLogsLoadedFor] = useState('')
+  const [buildLog, setBuildLog] = useState<string | null>(null)
+  const [buildLogError, setBuildLogError] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const buildLogBoxRef = useRef<HTMLDivElement | null>(null)
+  const cancelWaitRef = useRef(false)
 
-  // Сбрасываем локальные правки томов и env при переходе на другой контейнер.
-  // Сравнение во время рендера — штатный приём React для такого сброса.
-  if (volumesFor !== realId) {
-    setVolumesFor(realId)
-    setVolumes(container?.volumes || [])
-    setEnvConfigId(container?.envConfigId || '')
-  }
-
-  const filteredLogs = useMemo(() => {
-    const allLogs = container?.logs || []
-    return filterLogsBySearch(allLogs, search)
-  }, [container, search])
-
-  const selectedEnv = configs.find((config) => config.id === envConfigId)
-  const dockerCmd = useMemo(() => {
-    if (!container) {
-      return ''
+  useEffect(() => {
+    cancelWaitRef.current = false
+    return () => {
+      cancelWaitRef.current = true
     }
-    return buildDockerCommand(container, volumes, selectedEnv)
-  }, [container, volumes, selectedEnv])
+  }, [])
 
-  const copyDocker = () => {
-    copyText(dockerCmd)
-  }
+  useEffect(() => {
+    const loadRecord = async () => {
+      try {
+        const res = await fetchMine()
+        const found = res.data.find((c) => c.id === realId) || null
+        setRecord(found)
+        if (!found) {
+          setError('Контейнер не найден')
+        }
+      } catch {
+        setError('Ошибка загрузки контейнера')
+      }
+    }
+    loadRecord()
+    const timer = setInterval(loadRecord, 5000)
+    return () => clearInterval(timer)
+  }, [realId])
 
-  const copyFilteredLogs = () => {
-    copyText(filteredLogs.join('\n'))
-  }
-
-  const downloadLogs = () => {
-    if (!container) {
+  useEffect(() => {
+    if (!record) {
       return
     }
-    const logText = filteredLogs.join('\n')
-    downloadTextFile(`${container.name}.log`, logText)
+    fetchContainerSpec(record.id)
+      .then((res) => setSpec(res.data))
+      .catch(() => setSpec(null))
+  }, [record])
+
+  const wantLogs = tab === 1 && record ? record.id : ''
+  const isStaleLogs = logsLoadedFor !== wantLogs
+  const logsLoading = wantLogs !== '' && (logs === null || isStaleLogs)
+
+  useEffect(() => {
+    if (!wantLogs) {
+      return
+    }
+    const loadingFor = wantLogs
+    let alive = true
+    fetchContainerLogs(loadingFor)
+      .then((res) => {
+        if (!alive) return
+        setLogs(res.data.split('\n'))
+        setLogsLoadedFor(loadingFor)
+      })
+      .catch(() => {
+        if (!alive) return
+        setLogs([])
+        setLogsLoadedFor(loadingFor)
+      })
+    return () => {
+      alive = false
+    }
+  }, [wantLogs])
+
+  const isBuilding = record?.status === 'building'
+  const recordId = record?.id
+
+  useEffect(() => {
+    if (!isBuilding || !recordId) {
+      setBuildLog(null)
+      setBuildLogError('')
+      return
+    }
+
+    let alive = true
+    let socket: WebSocket | null = null
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+    let gotData = false
+
+    const appendLine = (line: string) => {
+      if (!alive) return
+      gotData = true
+      setBuildLogError('')
+      setBuildLog((prev) => {
+        if (prev === null || prev === '') {
+          return line
+        }
+        return `${prev}\n${line}`
+      })
+    }
+
+    const loadBuildLogOnce = () => {
+      fetchBuildLog(recordId)
+        .then((res) => {
+          if (!alive) return
+          setBuildLog(res.data)
+          setBuildLogError('')
+        })
+        .catch((loadError) => {
+          if (!alive) return
+          if (loadError instanceof Error && 'status' in loadError && (loadError as any).status === 404) {
+            setBuildLogError((loadError as any).message)
+          }
+        })
+    }
+
+    const startPollingFallback = () => {
+      if (pollTimer !== null) return
+      loadBuildLogOnce()
+      pollTimer = setInterval(loadBuildLogOnce, 2000)
+    }
+
+    const openStream = () => {
+      try {
+        const httpBase = (import.meta.env.VITE_API_BASE || '').replace(/\/+$/, '')
+        const wsBase = httpBase.replace(/^http/, 'ws')
+        const token = encodeURIComponent(localStorage.getItem('token') || '')
+        socket = new WebSocket(`${wsBase}/api/v1/containers/${recordId}/build-log/stream?token=${token}`)
+      } catch {
+        startPollingFallback()
+        return
+      }
+
+      socket.onmessage = (event) => appendLine(String(event.data))
+      socket.onerror = () => {
+        if (alive && !gotData) {
+          startPollingFallback()
+        }
+      }
+    }
+
+    openStream()
+
+    return () => {
+      alive = false
+      if (pollTimer !== null) {
+        clearInterval(pollTimer)
+      }
+      try {
+        socket?.close()
+      } catch {
+        // уже закрыт
+      }
+    }
+  }, [isBuilding, recordId])
+
+  useEffect(() => {
+    const logBox = buildLogBoxRef.current
+    if (logBox) {
+      logBox.scrollTop = logBox.scrollHeight
+    }
+  }, [buildLog])
+
+  const handleCopyLogs = () => {
+    const allLogs = (logs || []).join('\n')
+    copyText(allLogs)
+  }
+
+  const handleDownloadLogs = () => {
+    if (!record) return
+    const logText = (logs || []).join('\n')
+    downloadTextFile(`${record.id}.log`, logText)
   }
 
   const handleAddVolume = () => {
     const volumeName = newVolName.trim()
     const mountPath = newVolPath.trim()
-    if (!volumeName || !mountPath) {
-      return
-    }
+    if (!volumeName || !mountPath) return
 
-    const newVolume: ContainerVolume = {
+    const newVolume = {
       id: `vol-${Date.now()}`,
       name: volumeName,
       mountPath,
@@ -144,20 +273,75 @@ export default function ContainerDetails() {
     setFollow(!follow)
   }
 
-  if (!container) {
+  const handleOp = async (action: 'start' | 'stop' | 'restart' | 'remove') => {
+    if (!record || busy) return
+
+    setBusy(true)
+    setError(null)
+
+    try {
+      if (action === 'start' || action === 'restart') {
+        await startContainer(record.id)
+      } else if (action === 'stop') {
+        await stopContainer(record.id)
+      } else if (action === 'remove') {
+        await removeContainer(record.id)
+        navigate('/applications')
+        return
+      }
+
+      // Poll for status update
+      const startTime = Date.now()
+      const targetStatus = action === 'stop' ? 'stopped' : 'running'
+      while (Date.now() - startTime < 90000) {
+        if (cancelWaitRef.current) return
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        try {
+          const res = await fetchMine()
+          const found = res.data.find((c) => c.id === record.id)
+          if (found) {
+            setRecord(found)
+            if (found.status === targetStatus || found.status === 'error') break
+          }
+        } catch {
+          // continue polling
+        }
+      }
+    } catch (e: any) {
+      setError(e.message || 'Операция не удалась')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!record) {
     return (
       <Box className={styles.page}>
         <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate(-1)}>Назад</Button>
-        <Card><CardContent>Контейнер не найден: {realId}</CardContent></Card>
+        <Card><CardContent>{error || `Контейнер не найден: ${realId}`}</CardContent></Card>
       </Box>
     )
   }
 
-  const statusColor = getStatusColor(container.status)
+  const selectedEnv = configs.find((config) => config.id === envConfigId)
+  const dockerCmd = useMemo(() => {
+    if (!spec) return ''
+    return buildDockerCommand(spec, selectedEnv)
+  }, [spec, selectedEnv])
+
+  const copyDocker = () => {
+    copyText(dockerCmd)
+  }
+
+  const copyFilteredLogs = () => {
+    copyText(filterLogsBySearch(logs || [], search).join('\n'))
+  }
+
+  const statusColor = getStatusColor(record.status)
   const followLabel = follow ? 'Слежение: вкл' : 'Слежение: выкл'
   const followColor = follow ? 'success' : 'default'
-  const volumeArgsPreview = volumes.map((volume) => `-v ${volume.name}:${volume.mountPath}`).join(' ') || '# нет томов'
   const canAddVolume = !newVolName.trim() || !newVolPath.trim()
+  const appUrl = getAppUrl(record.node_id, spec?.ports || [])
 
   return (
     <Box className={styles.page}>
@@ -166,21 +350,32 @@ export default function ContainerDetails() {
       <Box className={styles.header}>
         <Box>
           <Typography variant="h4" className={styles.header__title}>
-            {container.name}
-            <Chip size="small" color={statusColor} label={container.status} />
-            <Chip size="small" variant="outlined" label={container.image} />
+            {record.app_name}
+            <Chip size="small" color={statusColor} label={record.status} />
+            <Chip size="small" variant="outlined" label={record.image} />
           </Typography>
           <Box className={styles.header__meta}>
-            <Typography variant="body2">{container.nodeId} • {container.id}</Typography>
-            <Typography variant="caption">{new Date(container.createdAt).toLocaleString()}</Typography>
+            <Typography variant="body2">{record.node_id} • {record.id}</Typography>
+            <Typography variant="caption">{new Date(record.updated_at).toLocaleString()}</Typography>
           </Box>
         </Box>
         <Stack direction="row" spacing={1}>
-          <Button variant="outlined" startIcon={<RotateCcw size={16} />}>Перезапустить</Button>
-          <Button variant="contained" color="success" startIcon={<Play size={16} />}>Старт</Button>
-          <Button variant="contained" color="error" startIcon={<Square size={16} />}>Стоп</Button>
+          <Button variant="outlined" startIcon={<RotateCcw size={16} />} disabled={busy} onClick={() => handleOp('restart')}>
+            {busy ? 'Перезапуск...' : 'Перезапустить'}
+          </Button>
+          <Button variant="contained" color="success" startIcon={<Play size={16} />} disabled={busy || record.status === 'running'} onClick={() => handleOp('start')}>
+            {busy ? 'Запуск...' : 'Старт'}
+          </Button>
+          <Button variant="contained" color="error" startIcon={<Square size={16} />} disabled={busy || record.status === 'stopped'} onClick={() => handleOp('stop')}>
+            {busy ? 'Остановка...' : 'Стоп'}
+          </Button>
+          <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} disabled={busy} onClick={() => handleOp('remove')}>
+            {busy ? 'Удаление...' : 'Удалить'}
+          </Button>
         </Stack>
       </Box>
+
+      {error && <Alert severity="error">{error}</Alert>}
 
       <Card className={styles.tabsCard}>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2 }}>
@@ -197,36 +392,44 @@ export default function ContainerDetails() {
           <Stack spacing={2}>
             <Card><CardContent>
               <Typography variant="h6" sx={{ fontWeight: 650, mb: 1 }}>Команда запуска</Typography>
-              <Box className={styles.dockerPreview}>{dockerCmd}</Box>
-              <Button size="small" sx={{ mt: 1 }} startIcon={<Copy size={14} />} onClick={copyDocker}>Копировать команду</Button>
+              <Box className={styles.dockerPreview}>{dockerCmd || 'Загрузка...'}</Box>
+              <Button size="small" sx={{ mt: 1 }} startIcon={<Copy size={14} />} onClick={copyDocker} disabled={!dockerCmd}>Копировать команду</Button>
             </CardContent></Card>
             <Card><CardContent>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Порты</Typography>
               <Box className={styles.portList}>
-                {container.ports.length === 0 ? (
+                {spec?.ports.length === 0 ? (
                   <Typography variant="body2" color="text.secondary">Нет проброшенных портов</Typography>
                 ) : (
-                  container.ports.map((port) => (
-                    <Chip
-                      key={port.hostPort}
-                      icon={<Globe size={14} />}
-                      label={`${port.hostPort} → ${port.containerPort}/${port.protocol}`}
-                      size="small"
-                      color="primary"
-                      variant="outlined"
-                    />
-                  ))
+                  <>
+                    {spec?.ports.map((port) => (
+                      <Box key={port.host} sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                        <Chip
+                          icon={<Globe size={14} />}
+                          label={`${port.host} → ${port.container}`}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                        />
+                        {appUrl && port.host === spec.ports[0].host && (
+                          <a href={appUrl} target="_blank" rel="noopener noreferrer" sx={{ textDecoration: 'none' }}>
+                            <Button size="small" startIcon={<ExternalLink size={14} />} variant="outlined">Открыть приложение</Button>
+                          </a>
+                        )}
+                      </Box>
+                    ))}
+                  </>
                 )}
               </Box>
             </CardContent></Card>
           </Stack>
           <Stack spacing={2}>
             <Card><CardContent>
-              <Stack className={styles.stat} direction="row"><Box className={`${styles.stat__icon} ${styles['stat__icon--primary']}`}><BoxIcon size={18} /></Box><Box><Typography variant="body2" color="text.secondary">Образ</Typography><Typography sx={{ fontWeight: 600 }}>{container.image}</Typography></Box></Stack>
+              <Stack className={styles.stat} direction="row"><Box className={`${styles.stat__icon} ${styles['stat__icon--primary']}`}><BoxIcon size={18} /></Box><Box><Typography variant="body2" color="text.secondary">Образ</Typography><Typography sx={{ fontWeight: 600 }}>{spec?.image || record.image}</Typography></Box></Stack>
               <Divider sx={{ my: 1.5 }} />
               <Box className={styles.kv}>
-                <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Рестарт</span><span className={styles.kv__rowValue}>{container.restartPolicy}</span></Box>
-                <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Узел</span><span className={styles.kv__rowValue}>{container.nodeId}</span></Box>
+                <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Рестарт</span><span className={styles.kv__rowValue}>unless-stopped</span></Box>
+                <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Узел</span><span className={styles.kv__rowValue}>{record.node_id}</span></Box>
                 <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Env-конфиг</span><span className={styles.kv__rowValue}>{selectedEnv?.name || 'встроенные env'}</span></Box>
               </Box>
             </CardContent></Card>
@@ -242,20 +445,29 @@ export default function ContainerDetails() {
               <Typography variant="caption" sx={{ fontWeight: 600 }}>Логи контейнера</Typography>
               <input className={styles.logs__search} placeholder="Поиск по логам..." value={search} onChange={e => setSearch(e.target.value)} />
               <Chip size="small" label={followLabel} onClick={handleToggleFollow} color={followColor} sx={{ cursor: 'pointer' }} />
-              <IconButton size="small" onClick={downloadLogs} sx={{ color: '#e2e8f0' }}><Download size={16} /></IconButton>
-              <IconButton size="small" onClick={copyFilteredLogs} sx={{ color: '#e2e8f0' }}><Copy size={14} /></IconButton>
+              <IconButton size="small" onClick={handleDownloadLogs} sx={{ color: '#e2e8f0' }}><Download size={16} /></IconButton>
+              <IconButton size="small" onClick={handleCopyLogs} sx={{ color: '#e2e8f0' }}><Copy size={14} /></IconButton>
             </Box>
             <Box className={styles.logs__body}>
-              {filteredLogs.length === 0 ? (
-                <Typography variant="body2" sx={{ opacity: .6 }}>Нет логов по фильтру</Typography>
-              ) : (
-                filteredLogs.map((line, lineIndex) => <div key={lineIndex} className={styles.logs__line}>{line}</div>)
+              {isBuilding && (
+                <Box ref={buildLogBoxRef} sx={{ bgcolor: '#0b1220', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12, p: 2, borderRadius: 2, maxHeight: 380, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {buildLog === null ? (buildLogError || 'Подключение к логу сборки...') : buildLog === '' ? 'Пока пусто — первые шаги появятся через пару секунд...' : buildLog}
+                </Box>
               )}
-              {follow && <Typography variant="caption" sx={{ opacity: .5, display: 'block', mt: 1 }}>— режим слежения, новые строки появятся автоматически —</Typography>}
+              {!isBuilding && logsLoading && <Typography color="text.secondary">Загрузка логов...</Typography>}
+              {!isBuilding && !logsLoading && logs !== null && (
+                <Box sx={{ bgcolor: '#0b1220', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12, p: 2, borderRadius: 2, maxHeight: 380, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {logs.length === 0 ? '— нет логов —' : logs.map((line, lineIndex) => <div key={lineIndex} className={styles.logs__line}>{line}</div>)}
+                </Box>
+              )}
+              {!isBuilding && !logsLoading && logs === null && (
+                <Typography color="text.secondary">Контейнер не найден на сервере</Typography>
+              )}
+              {follow && !isBuilding && <Typography variant="caption" sx={{ opacity: .5, display: 'block', mt: 1 }}>— режим слежения, новые строки появятся автоматически —</Typography>}
             </Box>
           </Box>
           <CardContent>
-            <Typography variant="caption" color="text.secondary">Логи получаются через `docker logs {container.name}`. В реальном бэкенде — стриминг по WebSocket.</Typography>
+            <Typography variant="caption" color="text.secondary">Логи получаются через `docker logs {record.name}`. В реальном бэкенде — стриминг по WebSocket.</Typography>
           </CardContent>
         </Card>
       )}
@@ -265,10 +477,10 @@ export default function ContainerDetails() {
           <Card><CardContent>
             <Typography variant="h6" sx={{ fontWeight: 650, mb: 2 }}>Параметры запуска</Typography>
             <Box className={styles.kv}>
-              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Образ</span><span className={styles.kv__rowValue}>{container.image}</span></Box>
-              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Команда</span><span className={styles.kv__rowValue}>{container.command || '— (по умолчанию)'}</span></Box>
-              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Политика рестарта</span><span className={styles.kv__rowValue}>{container.restartPolicy}</span></Box>
-              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Создан</span><span className={styles.kv__rowValue}>{new Date(container.createdAt).toLocaleString()}</span></Box>
+              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Образ</span><span className={styles.kv__rowValue}>{spec?.image || record.image}</span></Box>
+              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Имя контейнера</span><span className={styles.kv__rowValue}>{spec?.name || record.app_name}</span></Box>
+              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Политика рестарта</span><span className={styles.kv__rowValue}>unless-stopped</span></Box>
+              <Box className={styles.kv__row}><span className={styles.kv__rowLabel}>Обновлено</span><span className={styles.kv__rowValue}>{new Date(record.updated_at).toLocaleString()}</span></Box>
             </Box>
 
             <Typography variant="subtitle1" sx={{ fontWeight: 600, mt: 3, mb: 1 }}>Env-конфигурация</Typography>
@@ -283,20 +495,20 @@ export default function ContainerDetails() {
               <Box className={styles.dockerPreview}>{toDockerEnvArgs(selectedEnv)}</Box>
             ) : (
               <Box className={styles.kv}>
-                {container.env.length === 0 ? (
-                  <Typography variant="body2" color="text.secondary">Нет env</Typography>
-                ) : (
-                  container.env.map((envVar) => (
-                    <Box key={envVar.key} className={styles.kv__row}>
-                      <span className={styles.kv__rowLabel}>{envVar.key}</span>
-                      <span className={styles.kv__rowValue}>{envVar.value}</span>
+                {spec && Object.keys(spec.env).length > 0 ? (
+                  Object.entries(spec.env).map(([k, v]) => (
+                    <Box key={k} className={styles.kv__row}>
+                      <span className={styles.kv__rowLabel}>{k}</span>
+                      <span className={styles.kv__rowValue}>{v}</span>
                     </Box>
                   ))
+                ) : (
+                  <Typography variant="body2" color="text.secondary">Нет env</Typography>
                 )}
               </Box>
             )}
             <Box className={styles.dockerPreview} sx={{ mt: 2 }}>{dockerCmd}</Box>
-            <Button size="small" startIcon={<Copy size={14} />} sx={{ mt: 1 }} onClick={copyDocker}>Копировать docker run</Button>
+            <Button size="small" startIcon={<Copy size={14} />} sx={{ mt: 1 }} onClick={copyDocker} disabled={!dockerCmd}>Копировать docker run</Button>
           </CardContent></Card>
         </Stack>
       )}
@@ -330,7 +542,7 @@ export default function ContainerDetails() {
           </Stack>
 
           <Box className={styles.dockerPreview} sx={{ mt: 2 }}>
-            {volumeArgsPreview}
+            {volumes.map((volume) => `-v ${volume.name}:${volume.mountPath}`).join(' ') || '# нет томов'}
           </Box>
         </CardContent></Card>
       )}

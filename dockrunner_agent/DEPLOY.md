@@ -98,6 +98,47 @@ docker run -d --name agent --restart unless-stopped \
   dockrunner-agent
 ```
 
+### Важно: пути томов для чужих контейнеров
+
+Агент лишь просит docker-демона (`/var/run/docker.sock`), а контейнеры
+создаёт **демон хоста**. Бинд `источник:путь` демон всегда резолвит
+**на хосте**, а не внутри контейнера агента. Поэтому если внутри агента
+workspace — `/data/workspace`, а на хосте этот каталог — `/opt/agent-data`,
+то бинд `/data/workspace/ivan/app:/data` будет указывать в никуда
+(докер молча создаст пустую папку `/data/...` на хосте). Симптом: в
+пользовательских контейнерах пустые примонтированные папки.
+
+Два рабочих варианта:
+
+**А. Те же пути внутри и снаружи (проще, рекомендую):**
+
+```bash
+mkdir -p /opt/agent-data
+docker run -d --name agent --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/agent-data:/opt/agent-data \
+  -p 8090:8090 \
+  --env-file .env \
+  dockrunner-agent
+```
+
+```env
+SQLITE_PATH=/opt/agent-data/agent.db
+WORKSPACE_DIR=/opt/agent-data/workspace
+# HOST_WORKSPACE_DIR не нужен — пути совпадают
+```
+
+**Б. Разные пути + трансляция:** оставь `-v /opt/agent-data:/data`
+(`WORKSPACE_DIR=/data/workspace`) и добавь в `.env`:
+
+```env
+HOST_WORKSPACE_DIR=/opt/agent-data/workspace
+```
+
+Агент сам пересчитает префикс workspace в хостовый при создании биндов.
+Именованные тома (просто имя без пути) в трансляции не нуждаются —
+их именами управляет сам демон.
+
 ### Куда деваются проекты и файлы (важно)
 
 Всё состояние агента лежит в **одном** каталоге `/data` внутри контейнера:

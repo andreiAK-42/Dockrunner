@@ -1,5 +1,5 @@
 import { Box, Button, Card, CardContent, Chip, Stack, Typography, Divider, Tab, Tabs, FormControl, InputLabel, Select, MenuItem, Alert, Tooltip } from '@mui/material'
-import { ArrowLeft, Play, Square, RefreshCw, Terminal, HardDrive as HD, Copy, Download, Box as BoxIcon, Server, Activity, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, Square, RefreshCw, Terminal, HardDrive as HD, Copy, Download, Box as BoxIcon, Server, Activity, Trash2, ExternalLink } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef } from 'react'
 import { getAppById } from '../../config/applications'
@@ -100,6 +100,30 @@ export default function ApplicationDetails() {
       })
       .catch(() => setRecord(null))
   }, [id])
+
+  // Poll for record updates while building or during operations
+  useEffect(() => {
+    if (!record || (record.status !== 'building' && !busy)) {
+      return
+    }
+    let alive = true
+    const pollRecord = async () => {
+      try {
+        const res = await fetchMine()
+        const found = res.data.find((c) => c.id === record.id) || null
+        if (alive && found) {
+          setRecord(found)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const timer = setInterval(pollRecord, POLL_INTERVAL_MS)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [record?.id, record?.status, busy])
 
   useEffect(() => {
     if (!record) {
@@ -447,7 +471,18 @@ export default function ApplicationDetails() {
             <Typography variant="h6" sx={{ fontWeight: 650, mb: 2 }}>Порты</Typography>
             {!spec || spec.ports.length === 0
               ? <Typography color="text.secondary">Нет проброшенных портов</Typography>
-              : <Stack direction="row" spacing={1} flexWrap="wrap">{spec.ports.map((p) => <Chip key={`${p.host}-${p.container}`} size="small" label={`${p.host} → ${p.container}`} color="primary" variant="outlined" />)}</Stack>}
+              : <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {spec.ports.map((p) => (
+                    <Box key={`${p.host}-${p.container}`} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip size="small" label={`${p.host} → ${p.container}`} color="primary" variant="outlined" />
+                      {p.host === spec.ports[0].host && (
+                        <a href={`http://${record?.node_id}:${p.host}`} target="_blank" rel="noopener noreferrer">
+                          <Button size="small" startIcon={<ExternalLink size={14} />} variant="outlined">Открыть</Button>
+                        </a>
+                      )}
+                    </Box>
+                  ))}
+                </Stack>}
           </CardContent></Card>
 
           <Card><CardContent>

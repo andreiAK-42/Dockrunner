@@ -82,6 +82,7 @@ func main() {
 
 	if queueClient != nil {
 		handler := worker.NewHandler(cfg.AgentID, cfg.Workspace, db, dockCli, queueClient, logger, builds, streamer.Attach, streamer.Detach)
+		handler.SetHostWorkspace(cfg.HostWorkspace)
 		if err := queueClient.Consume(queue.AgentQueue(cfg.AgentID), 4, handler.Handle); err != nil {
 			logger.Error("consume tasks failed", "error", err)
 			os.Exit(1)

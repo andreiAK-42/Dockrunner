@@ -72,8 +72,9 @@ func (s *Service) CalculatePrice(ctx context.Context, req *Request) (float64, er
 	return math.Round(base*float64(ServiceCount(req))*100) / 100, nil
 }
 
-// Approve одобряет заявку: запускает контейнеры и списывает цену с баланса.
-// При нехватке средств деплой best-effort удаляется, заявка остаётся pending.
+// Approve одобряет заявку: сначала списывает цену с баланса, потом запускает контейнеры.
+// Если списание не удалось — контейнер не запускается, заявка остаётся pending.
+// Если запуск не удался после списания — деньги возвращаются.
 func (s *Service) Approve(ctx context.Context, id uuid.UUID, adminLogin string) (string, error) {
 	req, err := s.repo.Get(ctx, id)
 	if err != nil {
@@ -81,6 +82,12 @@ func (s *Service) Approve(ctx context.Context, id uuid.UUID, adminLogin string) 
 	}
 	if req.Status != "pending" {
 		return "", ErrInvalidState
+	}
+	if req.Price <= 0 {
+		return "", errors.New("price must be positive — set price before approval")
+	}
+	if _, err := s.balances.DeductFunds(ctx, req.OwnerLogin, req.Price, "деплой "+req.AppName); err != nil {
+		return "", err
 	}
 	ports := make([]containers.PortSpec, 0, len(req.Ports))
 	for _, p := range req.Ports {
@@ -106,13 +113,7 @@ func (s *Service) Approve(ctx context.Context, id uuid.UUID, adminLogin string) 
 		Services:      req.Services,
 	})
 	if err != nil {
-		return "", err
-	}
-	if _, err := s.balances.DeductFunds(ctx, req.OwnerLogin, req.Price, "деплой "+req.AppName); err != nil {
-		// Деньги не списались — убираем только что созданный деплой.
-		if rmErr := s.containers.RemoveDeployment(ctx, req.OwnerLogin, deploymentID); rmErr != nil {
-			s.logger.Warn("approve cleanup failed", zap.String("deployment", deploymentID), zap.Error(rmErr))
-		}
+		_, _ = s.balances.AddFunds(ctx, req.OwnerLogin, req.Price, "возврат за неудачный деплой "+req.AppName)
 		return "", err
 	}
 	if err := s.repo.UpdateStatus(ctx, id, "approved", "", adminLogin, deploymentID); err != nil {

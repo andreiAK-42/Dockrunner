@@ -30,6 +30,8 @@ type Config struct {
 	RabbitTLSSkipVerify bool
 	SQLitePath          string
 	Workspace           string
+	// Тот же workspace глазами docker-демона (хоста). Пусто = как Workspace.
+	HostWorkspace       string
 	Port                string
 	Heartbeat           time.Duration
 }
@@ -71,6 +73,7 @@ func Load() Config {
 		RabbitTLSSkipVerify: getBool("RABBITMQ_TLS_SKIP_VERIFY", false),
 		SQLitePath:          getEnv("SQLITE_PATH", "./data/agent.db"),
 		Workspace:           getEnv("WORKSPACE_DIR", "./workspace"),
+		HostWorkspace:       getEnv("HOST_WORKSPACE_DIR", ""),
 		Port:                getEnv("PORT", "8090"),
 		Heartbeat:           getDuration("HEARTBEAT_INTERVAL", 15*time.Second),
 	}

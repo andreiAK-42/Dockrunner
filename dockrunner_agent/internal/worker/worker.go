@@ -91,7 +91,11 @@ type Event struct {
 type Handler struct {
 	agentID   string
 	workspace string
-	db        *sql.DB
+	// hostWorkspace — тот же каталог глазами docker-демона (хоста).
+	// Нужен только если агент в контейнере и пути различаются:
+	// бинды для чужих контейнеров демон резолвит на хосте, а не в агенте.
+	hostWorkspace string
+	db            *sql.DB
 	dock      *docker.Client
 	queue     *queue.Client
 	logger    *slog.Logger
@@ -119,6 +123,25 @@ func NewHandler(agentID, workspace string, db *sql.DB, dock *docker.Client, queu
 		onStopped: onStopped,
 		appLocks:  map[string]*sync.Mutex{},
 	}
+}
+
+// SetHostWorkspace задаёт хостовый путь workspace для биндов.
+// Пусто или равно workspace — трансляции нет (агент бинарником на хосте).
+func (h *Handler) SetHostWorkspace(hostWorkspace string) {
+	h.hostWorkspace = hostWorkspace
+}
+
+// toDaemonPath пересчитывает путь из файловой системы агента в путь,
+// каким его увидит docker-демон (хост). Вне workspace — как есть.
+func (h *Handler) toDaemonPath(abs string) string {
+	if h.hostWorkspace == "" || h.hostWorkspace == h.workspace {
+		return abs
+	}
+	rel, err := filepath.Rel(h.workspace, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return abs
+	}
+	return filepath.Join(h.hostWorkspace, rel)
 }
 
 // lockApp serializes tasks touching one project dir (owner/app).
@@ -439,7 +462,9 @@ func (h *Handler) resolveVolumes(task Task) ([]docker.VolumeMount, error) {
 			if err != nil {
 				return nil, err
 			}
-			volumes = append(volumes, docker.VolumeMount{Name: abs, Path: containerPath})
+			// Путь для демона: если агент в контейнере, хост видит тот же
+			// каталог по другому адресу (см. HOST_WORKSPACE_DIR).
+			volumes = append(volumes, docker.VolumeMount{Name: h.toDaemonPath(abs), Path: containerPath})
 			continue
 		}
 		volumes = append(volumes, docker.VolumeMount{Name: v.Name, Path: containerPath})
@@ -705,6 +730,17 @@ func (h *Handler) remove(ctx context.Context, task Task) error {
 		return queue.Permanent(err)
 	}
 	_ = store.DeleteDeployment(h.db, task.DeploymentID)
+
+	// Delete project directory on worker (git repo, build artifacts)
+	projDir, err := fsx.ProjectDir(h.workspace, dep.Owner, dep.AppName)
+	if err == nil {
+		if err := os.RemoveAll(projDir); err != nil {
+			h.logger.Warn("failed to remove project dir", "dir", projDir, "error", err)
+		} else {
+			h.logger.Info("project directory removed", "dir", projDir)
+		}
+	}
+
 	h.publishEvent(ctx, appEvent("container.removed", task, "приложение удалено"))
 	if h.onStopped != nil {
 		h.onStopped(dep.Container)
