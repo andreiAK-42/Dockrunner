@@ -1,6 +1,0 @@
-В корне проекта для сборки под Linux
-
-docker build -f Dockerfile.linux -t dockrunner-build .
-
-docker run --rm -v "%cd%:/src" dockrunner-build bash -c "cmake -B build-linux -G Ninja && cmake --build build-linux"
-

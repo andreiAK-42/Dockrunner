@@ -1,6 +1,0 @@
-
-build
-build-linux
-.vscode/*
-!.vscode/extensions.json
-
