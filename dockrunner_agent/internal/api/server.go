@@ -211,14 +211,26 @@ func (s *Server) handleContainerSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status := s.liveStatus(r.Context(), dep.Container, dep.Status)
-	var ports []struct {
-		Host      int `json:"host"`
-		Container int `json:"container"`
+
+	var storedPorts []struct {
+		Host          int `json:"host"`
+		Container     int `json:"container"`
+		HostPort      int `json:"host_port"`
+		ContainerPort int `json:"container_port"`
 	}
-	_ = json.Unmarshal([]byte(dep.Ports), &ports)
-	specPorts := make([]SpecPort, 0, len(ports))
-	for _, p := range ports {
-		specPorts = append(specPorts, SpecPort{Host: p.Host, Container: p.Container})
+	_ = json.Unmarshal([]byte(dep.Ports), &storedPorts)
+	specPorts := make([]SpecPort, 0, len(storedPorts))
+	for _, p := range storedPorts {
+		host, containerPort := p.Host, p.Container
+		if host == 0 {
+			host = p.HostPort
+		}
+		if containerPort == 0 {
+			containerPort = p.ContainerPort
+		}
+		if host > 0 && containerPort > 0 {
+			specPorts = append(specPorts, SpecPort{Host: host, Container: containerPort})
+		}
 	}
 	var volumes []struct {
 		Name      string `json:"name"`
@@ -288,24 +300,28 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tail := queryTail(r)
-	history := s.streamer.History(dep.Container, tail)
-	if len(history) == 0 {
-		text, err := s.dock.LogsTail(r.Context(), dep.Container, strconv.Itoa(tail))
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
+	// Docker logs are the source of truth. The in-memory streamer only retains
+	// a small rolling buffer and must not replace the requested historical tail.
+	text, err := s.dock.LogsTail(r.Context(), dep.Container, strconv.Itoa(tail))
+	if err == nil {
 		writeJSON(w, http.StatusOK, LogsResponse{Data: text})
 		return
 	}
-	lines := make([]string, 0, len(history))
-	for _, raw := range history {
-		var entry logs.Entry
-		if err := json.Unmarshal([]byte(raw), &entry); err == nil {
-			lines = append(lines, entry.Line)
+	// A running stream may still have useful recent output if Docker's log
+	// driver does not support reading historical logs.
+	history := s.streamer.History(dep.Container, tail)
+	if len(history) > 0 {
+		lines := make([]string, 0, len(history))
+		for _, raw := range history {
+			var entry logs.Entry
+			if json.Unmarshal([]byte(raw), &entry) == nil {
+				lines = append(lines, entry.Line)
+			}
 		}
+		writeJSON(w, http.StatusOK, LogsResponse{Data: strings.Join(lines, "\n")})
+		return
 	}
-	writeJSON(w, http.StatusOK, LogsResponse{Data: strings.Join(lines, "\n")})
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 }
 
 // handleBuildLog godoc
@@ -343,7 +359,7 @@ func (s *Server) handleBuildLogStream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var history []string
-	if text, ok := s.builds.Tail(id, 200); ok {
+	if text, ok := s.builds.Tail(id, 10000); ok {
 		history = strings.Split(text, "\n")
 	}
 

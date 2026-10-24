@@ -256,7 +256,7 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
 		return "", ErrNotFound
 	}
-	if tail <= 0 || tail > 1000 {
+	if tail <= 0 || tail > 10000 {
 		tail = 200
 	}
 	body, err := s.agentGet(ctx, rec.NodeID, fmt.Sprintf("/containers/%s/logs?tail=%d", id, tail))
@@ -439,22 +439,22 @@ func (s *Service) Run(ctx context.Context, owner string, in RunInput) (string, e
 		expiresAt = &t
 	}
 	body, _ := json.Marshal(map[string]any{
-		"type":            "deploy",
-		"deployment_id":   id,
-		"app_name":        in.AppName,
-		"owner":           owner,
-		"repo_url":        in.RepoURL,
-		"image":           in.Image,
-		"container_name":  in.ContainerName,
-		"ports":           in.Ports,
-		"volumes":         in.Volumes,
-		"env":             in.Env,
-		"restart_policy":  "unless-stopped",
-		"cpu_cores":       in.CPUCores,
-		"memory_gb":       in.MemoryGB,
-		"disk_gb":         in.DiskGB,
-		"duration_hours":  in.DurationHours,
-		"services":        in.Services,
+		"type":           "deploy",
+		"deployment_id":  id,
+		"app_name":       in.AppName,
+		"owner":          owner,
+		"repo_url":       in.RepoURL,
+		"image":          in.Image,
+		"container_name": in.ContainerName,
+		"ports":          in.Ports,
+		"volumes":        in.Volumes,
+		"env":            in.Env,
+		"restart_policy": "unless-stopped",
+		"cpu_cores":      in.CPUCores,
+		"memory_gb":      in.MemoryGB,
+		"disk_gb":        in.DiskGB,
+		"duration_hours": in.DurationHours,
+		"services":       in.Services,
 	})
 	if err := s.queue.Publish(ctx, "agent."+in.NodeID, body); err != nil {
 		s.ops.Release(owner, in.AppName)
@@ -613,7 +613,7 @@ func (s *Service) GetRecord(ctx context.Context, owner, id string) (*admin.Conta
 
 // AgentBuildLog proxies the build log stored on the worker.
 func (s *Service) AgentBuildLog(ctx context.Context, nodeID, deploymentID string) ([]byte, error) {
-	return s.agentGet(ctx, nodeID, "/deployments/"+deploymentID+"/build-log?tail=200")
+	return s.agentGet(ctx, nodeID, "/deployments/"+deploymentID+"/build-log?tail=10000")
 }
 
 // AgentBuildLogStreamURL builds the worker WebSocket URL for live build logs.

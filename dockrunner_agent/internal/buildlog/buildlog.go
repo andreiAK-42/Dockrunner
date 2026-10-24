@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-const maxLines = 500
-const keepFor = 30 * time.Minute
+const maxLines = 10000
+const keepFor = 24 * time.Hour
 
 // Store keeps build log lines per deployment id in SQLite,
 // so logs survive agent restarts.

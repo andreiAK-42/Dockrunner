@@ -60,7 +60,18 @@ export default function Admin() {
   }
 
   useEffect(() => {
-    loadData().then(applyData).catch(failLoad)
+    let active = true
+    loadData().then((data) => { if (active) applyData(data) }).catch(failLoad)
+    const timer = window.setInterval(() => {
+      fetchAdminContainers().then((latest) => {
+        if (active) setContainers(latest)
+      }).catch(() => {
+      })
+    }, 5000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
   }, [])
 
   const handleContainerAction = (id: string, action: 'stop' | 'restart' | 'remove') => {

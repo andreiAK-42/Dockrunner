@@ -48,7 +48,7 @@ export function fetchMine() {
   return apiRequest<{ data: MineContainer[] }>('/api/v1/containers/mine')
 }
 
-export function fetchContainerLogs(id: string, tail = 200) {
+export function fetchContainerLogs(id: string, tail = 10000) {
   return apiRequest<{ data: string }>(`/api/v1/containers/${id}/logs?tail=${tail}`)
 }
 
