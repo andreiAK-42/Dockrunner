@@ -77,6 +77,10 @@ type Config struct {
 	DBRedisHost        string
 	DBRedisPort        int
 	DBRedisPassword    string
+	OllamaHost         string
+	OllamaPort         int
+	OllamaURL          string
+	OllamaAPIKey       string
 }
 
 func Load() (*Config, error) {
@@ -142,6 +146,10 @@ func Load() (*Config, error) {
 		DBRedisHost:        getEnv("DB_REDIS_HOST", "redis.dockrunner.local"),
 		DBRedisPort:        getInt("DB_REDIS_PORT", 6379),
 		DBRedisPassword:    getEnv("DB_REDIS_PASSWORD", ""),
+		OllamaHost:         getEnv("OLLAMA_HOST", "ollama.dockrunner.local"),
+		OllamaPort:         getInt("OLLAMA_PORT", 11434),
+		OllamaURL:          getEnv("OLLAMA_URL", ""),
+		OllamaAPIKey:       getEnv("OLLAMA_API_KEY", ""),
 	}
 
 	if cfg.PortsMin < 1 {

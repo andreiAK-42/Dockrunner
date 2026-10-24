@@ -1,116 +1,107 @@
 package config
 
 import (
-	"net/url"
+	"fmt"
 	"os"
-	"path/filepath"
-	"strconv"
 	"time"
 
-	"github.com/joho/godotenv"
+	"net/url"
+
+	"gopkg.in/yaml.v3"
 )
 
 const Version = "0.1.0"
 
+const configFile = "config.yaml"
+
+// Config — YAML-конфиг агента. Поля City/Lat/Lng/IP в файл не пишутся:
+// город и координаты определяются при старте, IP — из geo или локального интерфейса.
 type Config struct {
-	EnvFile             bool
-	AgentID             string
-	AgentName           string
-	AgentDescription    string
-	AgentCity           string
-	AgentLat            float64
-	AgentLng            float64
-	AgentPublicURL      string
-	// Явный внешний IP сервера (обязателен, если агент в docker:
-	// из контейнера хостовый IP автоопределением не достать).
-	AgentIP             string
-	CentralURL          string
-	Token               string
-	RabbitURL           string
-	RabbitTLSSkipVerify bool
-	SQLitePath          string
-	Workspace           string
-	// Тот же workspace глазами docker-демона (хоста). Пусто = как Workspace.
-	HostWorkspace       string
-	Port                string
-	Heartbeat           time.Duration
+	AgentName           string        `yaml:"AgentName"`
+	AgentDescription    string        `yaml:"AgentDescription"`
+	AgentPublicURL      string        `yaml:"AgentPublicURL"`
+	CentralURL          string        `yaml:"CentralURL"`
+	Token               string        `yaml:"Token"`
+	RabbitURL           string        `yaml:"RabbitURL"`
+	RabbitTLSSkipVerify bool          `yaml:"RabbitTLSSkipVerify"`
+	SQLitePath          string        `yaml:"SQLitePath"`
+	Workspace           string        `yaml:"Workspace"`
+	HostWorkspace       string        `yaml:"HostWorkspace"`
+	Port                string        `yaml:"Port"`
+	Heartbeat           time.Duration `yaml:"-"`
+	HeartbeatRaw        yaml.Node     `yaml:"Heartbeat"`
+
+	City string  `yaml:"-"`
+	Lat  float64 `yaml:"-"`
+	Lng  float64 `yaml:"-"`
+	IP   string  `yaml:"-"`
 }
 
-func loadEnvFile() bool {
-	if err := godotenv.Load(); err == nil {
-		return true
+func Load() (*Config, error) {
+	cfg, err := LoadOrCreateConfig()
+	if err != nil {
+		return nil, err
 	}
-	if err := godotenv.Load(".env"); err == nil {
-		return true
-	}
-	if exe, err := os.Executable(); err == nil {
-		if err := godotenv.Load(filepath.Join(filepath.Dir(exe), ".env")); err == nil {
-			return true
+	return cfg, nil
+}
+
+func LoadOrCreateConfig() (*Config, error) {
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		if err := os.WriteFile(configFile, []byte(defaultConfigYAML), 0644); err != nil {
+			return nil, fmt.Errorf("создание config.yaml: %w", err)
 		}
+		fmt.Printf("config created: %s\n", configFile)
 	}
-	return false
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("чтение config.yaml: %w", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("разбор config.yaml: %w", err)
+	}
+	cfg.normalize()
+	return &cfg, nil
 }
 
-func Load() Config {
-	envFile := loadEnvFile()
-	hostname, _ := os.Hostname()
-	if hostname == "" {
-		hostname = "worker-01"
+func (c *Config) normalize() {
+	c.Heartbeat = parseHeartbeat(c.HeartbeatRaw)
+	if c.Port == "" {
+		c.Port = "8090"
 	}
-	return Config{
-		EnvFile:             envFile,
-		AgentID:             getEnv("AGENT_ID", hostname),
-		AgentName:           getEnv("AGENT_NAME", hostname),
-		AgentDescription:    getEnv("AGENT_DESCRIPTION", ""),
-		AgentCity:           getEnv("AGENT_CITY", ""),
-		AgentLat:            getFloat("AGENT_LAT", 0),
-		AgentLng:            getFloat("AGENT_LNG", 0),
-		AgentPublicURL:      getEnv("AGENT_PUBLIC_URL", ""),
-		AgentIP:             getEnv("AGENT_IP", ""),
-		CentralURL:          getEnv("CENTRAL_URL", "http://localhost:8080"),
-		Token:               getEnv("AGENT_TOKEN", ""),
-		RabbitURL:           getEnv("RABBITMQ_URL", "amqp://dockrunner:dockrunner@localhost:5672/"),
-		RabbitTLSSkipVerify: getBool("RABBITMQ_TLS_SKIP_VERIFY", false),
-		SQLitePath:          getEnv("SQLITE_PATH", "./data/agent.db"),
-		Workspace:           getEnv("WORKSPACE_DIR", "./workspace"),
-		HostWorkspace:       getEnv("HOST_WORKSPACE_DIR", ""),
-		Port:                getEnv("PORT", "8090"),
-		Heartbeat:           getDuration("HEARTBEAT_INTERVAL", 15*time.Second),
+	if c.SQLitePath == "" {
+		c.SQLitePath = "./data/agent.db"
+	}
+	if c.Workspace == "" {
+		c.Workspace = "./workspace"
+	}
+	if c.AgentName == "" {
+		c.AgentName = "worker-01"
 	}
 }
 
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func parseHeartbeat(node yaml.Node) time.Duration {
+	if node.Kind == 0 && node.Value == "" {
+		return 15 * time.Second
 	}
-	return fallback
-}
-
-func getDuration(key string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
+	var seconds int64
+	if err := node.Decode(&seconds); err == nil {
+		if seconds <= 0 {
+			seconds = 15
 		}
+		return time.Duration(seconds) * time.Second
 	}
-	return fallback
-}
-
-func getBool(key string, fallback bool) bool {
-	if v := os.Getenv(key); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
-		}
+	var raw string
+	if err := node.Decode(&raw); err != nil || raw == "" {
+		return 15 * time.Second
 	}
-	return fallback
-}
-
-func getFloat(key string, fallback float64) float64 {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 15 * time.Second
 	}
-	return fallback
+	return d
 }
 
 func RedactURL(raw string) string {
@@ -123,3 +114,17 @@ func RedactURL(raw string) string {
 	}
 	return u.String()
 }
+
+const defaultConfigYAML = `AgentName: Saturn
+AgentDescription: Просто мощный сервер
+AgentPublicURL: http://127.0.0.1:8090/
+CentralURL: http://127.0.0.1:8080/
+Token: token
+RabbitURL: amqp://dockrunner:dockrunner@localhost:5672/
+RabbitTLSSkipVerify: false
+SQLitePath: ./data/agent.db
+Workspace: ./workspace
+HostWorkspace: ""
+Port: "8090"
+Heartbeat: 15
+`

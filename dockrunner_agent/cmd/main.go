@@ -28,29 +28,28 @@ import (
 // @description HTTP API воркера: контейнеры, хвост логов, WebSocket-стрим. Задачи принимает по RabbitMQ.
 // @BasePath /
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("load config failed", "error", err)
+		os.Exit(1)
+	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
 	logger.Info("starting dockrunner agent",
 		"version", config.Version,
-		"agent", cfg.AgentID,
-		"env_file", cfg.EnvFile,
+		"agent", cfg.AgentName,
 		"rabbitmq", config.RedactURL(cfg.RabbitURL),
 	)
-	if !cfg.EnvFile {
-		logger.Warn("no .env file found — using defaults and OS environment; run from the agent directory or beside the binary")
-	}
-	if cfg.AgentPublicURL == "" {
-		logger.Warn("AGENT_PUBLIC_URL is not set — central cannot proxy container spec/logs and build logs; set it to this agent HTTP address")
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if cfg.AgentLat == 0 && cfg.AgentLng == 0 {
-		if loc := geo.Detect(ctx, logger); loc.Lat != 0 || loc.Lng != 0 {
-			cfg.AgentCity, cfg.AgentLat, cfg.AgentLng = loc.City, loc.Lat, loc.Lng
-			logger.Info("geo detected", "city", loc.City, "lat", loc.Lat, "lng", loc.Lng)
-		}
+	if loc := geo.Detect(ctx, logger); loc.Lat != 0 || loc.Lng != 0 || loc.City != "" || loc.IP != "" {
+		cfg.City, cfg.Lat, cfg.Lng, cfg.IP = loc.City, loc.Lat, loc.Lng, loc.IP
+		logger.Info("geo detected", "city", loc.City, "lat", loc.Lat, "lng", loc.Lng, "ip", loc.IP)
+	}
+	if cfg.IP == "" {
+		cfg.IP = geo.LocalIP()
 	}
 
 	db, err := store.Open(cfg.SQLitePath)
@@ -81,16 +80,16 @@ func main() {
 	reattach(ctx, logger, db, dockCli, streamer)
 
 	if queueClient != nil {
-		handler := worker.NewHandler(cfg.AgentID, cfg.Workspace, db, dockCli, queueClient, logger, builds, streamer.Attach, streamer.Detach)
+		handler := worker.NewHandler(cfg.AgentName, cfg.Workspace, db, dockCli, queueClient, logger, builds, streamer.Attach, streamer.Detach)
 		handler.SetHostWorkspace(cfg.HostWorkspace)
-		if err := queueClient.Consume(queue.AgentQueue(cfg.AgentID), 4, handler.Handle); err != nil {
+		if err := queueClient.Consume(queue.AgentQueue(cfg.AgentName), 4, handler.Handle); err != nil {
 			logger.Error("consume tasks failed", "error", err)
 			os.Exit(1)
 		}
 	}
 
 	hostname, _ := os.Hostname()
-	go heartbeat.Start(ctx, logger, cfg.CentralURL, cfg.Token, cfg.AgentID, hostname, cfg.AgentName, cfg.AgentDescription, cfg.AgentCity, cfg.AgentLat, cfg.AgentLng, cfg.AgentPublicURL, cfg.AgentIP, cfg.Heartbeat, db, dockCli, cfg.Workspace)
+	go heartbeat.Start(ctx, logger, cfg, hostname, db, dockCli)
 
 	apiSrv := api.New(cfg, db, dockCli, streamer, builds, logger.Info)
 	httpSrv := &http.Server{
@@ -122,13 +121,13 @@ func main() {
 
 // connectQueue подключает RabbitMQ. Без очереди возвращает nil —
 // задачи и стрим логов недоступны, HTTP API продолжает работать.
-func connectQueue(ctx context.Context, cfg config.Config, logger *slog.Logger) *queue.Client {
+func connectQueue(ctx context.Context, cfg *config.Config, logger *slog.Logger) *queue.Client {
 	queueClient, err := queue.Dial(ctx, cfg.RabbitURL, cfg.RabbitTLSSkipVerify, logger)
 	if err != nil {
 		logger.Warn("rabbitmq not available, tasks and log streaming disabled", "error", err)
 		return nil
 	}
-	if err := queueClient.DeclareTopology(cfg.AgentID); err != nil {
+	if err := queueClient.DeclareTopology(cfg.AgentName); err != nil {
 		logger.Warn("rabbitmq topology failed", "error", err)
 	}
 	return queueClient

@@ -16,7 +16,7 @@ import (
 	"dockrunner_backend/internal/modules/auth"
 	"dockrunner_backend/internal/modules/balances"
 	"dockrunner_backend/internal/modules/containers"
-	"dockrunner_backend/internal/modules/databases"
+	"dockrunner_backend/internal/modules/integrations"
 	"dockrunner_backend/internal/modules/deploymentrequests"
 	"dockrunner_backend/internal/modules/envconfigs"
 	"dockrunner_backend/internal/modules/files"
@@ -194,9 +194,9 @@ func New(deps Dependencies) *gin.Engine {
 	quotasHandler := quotas.NewHandler(quotasService, deps.Logger)
 	quotas.RegisterRoutes(v1, quotasHandler, deps.Config.JWTSecret)
 
-	// --- Databases (managed postgres/mongo/redis) ---
-	databasesRepo := databases.NewRepository(deps.Postgres, deps.Logger)
-	databasesService := databases.NewService(databasesRepo, databases.DBConfig{
+	// --- Integrations (postgres/mongo/redis + ollama и новые типы) ---
+	integrationsRepo := integrations.NewRepository(deps.Postgres, deps.Logger)
+	integrationsService := integrations.NewService(integrationsRepo, integrations.Settings{
 		PostgresHost:     deps.Config.DBPostgresHost,
 		PostgresPort:     deps.Config.DBPostgresPort,
 		PostgresName:     deps.Config.DBPostgresName,
@@ -208,9 +208,13 @@ func New(deps Dependencies) *gin.Engine {
 		RedisHost:        deps.Config.DBRedisHost,
 		RedisPort:        deps.Config.DBRedisPort,
 		RedisPassword:    deps.Config.DBRedisPassword,
+		OllamaHost:       deps.Config.OllamaHost,
+		OllamaPort:       deps.Config.OllamaPort,
+		OllamaURL:        deps.Config.OllamaURL,
+		OllamaAPIKey:     deps.Config.OllamaAPIKey,
 	}, deps.Logger)
-	databasesHandler := databases.NewHandler(databasesService, deps.Logger)
-	databases.RegisterRoutes(v1, databasesHandler, deps.Config.JWTSecret)
+	integrationsHandler := integrations.NewHandler(integrationsService, deps.Logger)
+	integrations.RegisterRoutes(v1, integrationsHandler, deps.Config.JWTSecret)
 
 	// --- Balances ---
 	balancesRepo := balances.NewRepository(deps.Postgres, deps.Logger)

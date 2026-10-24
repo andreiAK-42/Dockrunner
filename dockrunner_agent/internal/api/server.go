@@ -54,7 +54,7 @@ type ErrorResponse struct {
 }
 
 type Server struct {
-	cfg      config.Config
+	cfg      *config.Config
 	db       *sql.DB
 	dock     *docker.Client
 	streamer *logs.Streamer
@@ -62,7 +62,7 @@ type Server struct {
 	logger   func(msg string, args ...any)
 }
 
-func New(cfg config.Config, db *sql.DB, dock *docker.Client, streamer *logs.Streamer, builds *buildlog.Store, log func(string, ...any)) *Server {
+func New(cfg *config.Config, db *sql.DB, dock *docker.Client, streamer *logs.Streamer, builds *buildlog.Store, log func(string, ...any)) *Server {
 	if builds == nil {
 		builds = buildlog.New(db)
 	}
@@ -112,7 +112,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{
 		Status:  "ok",
-		AgentID: s.cfg.AgentID,
+		AgentID: s.cfg.AgentName,
 		Version: config.Version,
 	})
 }

@@ -7,7 +7,6 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.8.1
-	github.com/joho/godotenv v1.5.1
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/rabbitmq/amqp091-go v1.15.0
 	github.com/shirou/gopsutil/v4 v4.26.9

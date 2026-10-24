@@ -70,16 +70,16 @@ type Task struct {
 }
 
 type Event struct {
-	Type               string     `json:"type"`
-	AgentID            string     `json:"agent_id"`
-	AppID              string     `json:"app_id"`
-	AppName            string     `json:"app_name"`
-	OwnerLogin         string     `json:"owner_login"`
-	Image              string     `json:"image"`
-	DeploymentID       string     `json:"deployment_id"`
-	DetectedDockerfile bool       `json:"detected_dockerfile"`
-	ComposeFile        string     `json:"compose_file"`
-	Services           []string   `json:"services,omitempty"`
+	Type               string   `json:"type"`
+	AgentID            string   `json:"agent_id"`
+	AppID              string   `json:"app_id"`
+	AppName            string   `json:"app_name"`
+	OwnerLogin         string   `json:"owner_login"`
+	Image              string   `json:"image"`
+	DeploymentID       string   `json:"deployment_id"`
+	DetectedDockerfile bool     `json:"detected_dockerfile"`
+	ComposeFile        string   `json:"compose_file"`
+	Services           []string `json:"services,omitempty"`
 	// ParentApp — головное приложение для событий сервис-контейнеров
 	// (нужно центру, чтобы снять oplock родительской операции).
 	ParentApp string     `json:"parent_app,omitempty"`
@@ -96,15 +96,15 @@ type Handler struct {
 	// бинды для чужих контейнеров демон резолвит на хосте, а не в агенте.
 	hostWorkspace string
 	db            *sql.DB
-	dock      *docker.Client
-	queue     *queue.Client
-	logger    *slog.Logger
-	builds    *buildlog.Store
-	onReady   func(containerID, containerName string)
-	onStopped func(containerID string)
-	mu        sync.Mutex
-	appLocks  map[string]*sync.Mutex
-	hostMu    sync.RWMutex
+	dock          *docker.Client
+	queue         *queue.Client
+	logger        *slog.Logger
+	builds        *buildlog.Store
+	onReady       func(containerID, containerName string)
+	onStopped     func(containerID string)
+	mu            sync.Mutex
+	appLocks      map[string]*sync.Mutex
+	hostMu        sync.RWMutex
 }
 
 func NewHandler(agentID, workspace string, db *sql.DB, dock *docker.Client, queue *queue.Client, logger *slog.Logger, builds *buildlog.Store, onReady func(string, string), onStopped func(string)) *Handler {
@@ -264,8 +264,14 @@ func (h *Handler) replyFiles(ctx context.Context, msg amqp.Delivery, task Task) 
 
 func appEvent(eventType string, task Task, msg string) Event {
 	return Event{
-		Type: eventType, AppID: task.AppID, AppName: task.AppName, OwnerLogin: task.Owner,
-		Image: task.Image, DeploymentID: task.DeploymentID, Ports: task.Ports, Message: msg,
+		Type:         eventType,
+		AppID:        task.AppID,
+		AppName:      task.AppName,
+		OwnerLogin:   task.Owner,
+		Image:        task.Image,
+		DeploymentID: task.DeploymentID,
+		Ports:        task.Ports,
+		Message:      msg,
 	}
 }
 
@@ -278,7 +284,10 @@ func (h *Handler) missingDeployment(ctx context.Context, task Task, what string)
 }
 
 func allowedNameRune(r rune) bool {
-	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-'
+	isLetter := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+	isDigit := r >= '0' && r <= '9'
+	isExtra := r == '_' || r == '.' || r == '-'
+	return isLetter || isDigit || isExtra
 }
 
 func sanitizeContainerName(appName, custom, deploymentID string) (string, error) {
@@ -372,9 +381,14 @@ func (h *Handler) prepare(ctx context.Context, task Task) error {
 		services, _ = git.ParseComposeNames(dir, compose)
 	}
 	h.publishEvent(ctx, Event{
-		Type: "prepare.completed", AppID: task.AppID, AppName: task.AppName,
-		DeploymentID: task.DeploymentID, DetectedDockerfile: dockerfile != "",
-		ComposeFile: compose, Services: services, Message: "проект готов к сборке",
+		Type:               "prepare.completed",
+		AppID:              task.AppID,
+		AppName:            task.AppName,
+		DeploymentID:       task.DeploymentID,
+		DetectedDockerfile: dockerfile != "",
+		ComposeFile:        compose,
+		Services:           services,
+		Message:            "проект готов к сборке",
 	})
 	return nil
 }
@@ -423,7 +437,9 @@ func (h *Handler) buildDockerfile(ctx context.Context, task Task, contextDir, do
 // failChild уведомляет центр о провале одного сервис-контейнера.
 func (h *Handler) failChild(ctx context.Context, task Task, parentApp, deploymentID, appName, message string, err error) error {
 	ev := appEvent("deploy.failed", task, message)
-	ev.DeploymentID, ev.AppName, ev.ParentApp = deploymentID, appName, parentApp
+	ev.DeploymentID = deploymentID
+	ev.AppName = appName
+	ev.ParentApp = parentApp
 	h.publishEvent(ctx, ev)
 	return err
 }
@@ -561,16 +577,35 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		return h.failChild(ctx, task, parentApp, deploymentID, appName, "запуск не удался: "+err.Error(), err)
 	}
 	h.logger.Info("deploy completed", "deployment", deploymentID, "container", containerID)
+
 	_ = store.SaveDeployment(h.db, store.Deployment{
-		ID: deploymentID, AppID: task.AppID, AppName: appName, Owner: task.Owner,
-		RepoURL: task.RepoURL, Name: name, Image: image, Container: containerID, Status: "running",
-		Ports: string(portsJSON), Volumes: string(volumesJSON), Env: string(envJSON),
-		CPUCores: task.CPUCores, MemoryGB: task.MemoryGB,
-		ParentID: parentID, ParentApp: parentApp, Service: service,
+		ID:        deploymentID,
+		AppID:     task.AppID,
+		AppName:   appName,
+		Owner:     task.Owner,
+		RepoURL:   task.RepoURL,
+		Name:      name,
+		Image:     image,
+		Container: containerID,
+		Status:    "running",
+		Ports:     string(portsJSON),
+		Volumes:   string(volumesJSON),
+		Env:       string(envJSON),
+		CPUCores:  task.CPUCores,
+		MemoryGB:  task.MemoryGB,
+		ParentID:  parentID,
+		ParentApp: parentApp,
+		Service:   service,
 	})
+
 	ev := appEvent("deploy.completed", task, "приложение запущено")
-	ev.DeploymentID, ev.AppName, ev.Image, ev.Ports, ev.ParentApp = deploymentID, appName, image, ports, parentApp
+	ev.DeploymentID = deploymentID
+	ev.AppName = appName
+	ev.Image = image
+	ev.Ports = ports
+	ev.ParentApp = parentApp
 	h.publishEvent(ctx, ev)
+
 	if h.onReady != nil {
 		h.onReady(containerID, name)
 	}
@@ -587,16 +622,17 @@ func (h *Handler) deployCompose(ctx context.Context, task Task, dir, compose str
 	}
 	svcs := all
 	if len(task.Services) > 0 {
-		want := map[string]bool{}
+		requested := map[string]bool{}
 		for _, name := range task.Services {
-			want[name] = true
+			requested[name] = true
 		}
-		svcs = svcs[:0]
+		filtered := make([]git.ComposeService, 0, len(task.Services))
 		for _, svc := range all {
-			if want[svc.Name] {
-				svcs = append(svcs, svc)
+			if requested[svc.Name] {
+				filtered = append(filtered, svc)
 			}
 		}
+		svcs = filtered
 		if len(svcs) == 0 {
 			return h.failDeploy(ctx, task, "запрошенные сервисы не найдены в compose", errComposeEmpty)
 		}
@@ -665,17 +701,34 @@ func (h *Handler) refresh(ctx context.Context, task Task) error {
 			parentApp = dep.AppName
 		}
 		return h.deploy(ctx, Task{
-			DeploymentID: dep.ParentID, AppID: dep.AppID, AppName: parentApp, Owner: owner,
-			RepoURL: dep.RepoURL, Services: []string{dep.Service},
-			Ports: ports, Volumes: volumes, Env: env, Restart: "unless-stopped",
-			CPUCores: dep.CPUCores, MemoryGB: dep.MemoryGB,
+			DeploymentID: dep.ParentID,
+			AppID:        dep.AppID,
+			AppName:      parentApp,
+			Owner:        owner,
+			RepoURL:      dep.RepoURL,
+			Services:     []string{dep.Service},
+			Ports:        ports,
+			Volumes:      volumes,
+			Env:          env,
+			Restart:      "unless-stopped",
+			CPUCores:     dep.CPUCores,
+			MemoryGB:     dep.MemoryGB,
 		})
 	}
 	return h.deploy(ctx, Task{
-		DeploymentID: dep.ID, AppID: dep.AppID, AppName: dep.AppName, Owner: owner,
-		RepoURL: dep.RepoURL, Image: dep.Image, ContainerName: dep.Name,
-		Ports: ports, Volumes: volumes, Env: env, Restart: "unless-stopped",
-		CPUCores: dep.CPUCores, MemoryGB: dep.MemoryGB,
+		DeploymentID:  dep.ID,
+		AppID:         dep.AppID,
+		AppName:       dep.AppName,
+		Owner:         owner,
+		RepoURL:       dep.RepoURL,
+		Image:         dep.Image,
+		ContainerName: dep.Name,
+		Ports:         ports,
+		Volumes:       volumes,
+		Env:           env,
+		Restart:       "unless-stopped",
+		CPUCores:      dep.CPUCores,
+		MemoryGB:      dep.MemoryGB,
 	})
 }
 

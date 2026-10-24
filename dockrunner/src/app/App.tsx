@@ -9,7 +9,7 @@ import EnvConfigs from '../pages/EnvConfigs'
 import Volumes from '../pages/Volumes'
 import Appearance from '../pages/Appearance'
 import Profile from '../pages/Profile'
-import Databases from '../pages/Databases'
+import Integrations from '../pages/Integrations'
 import Admin from '../pages/Admin'
 import Files from '../pages/Files'
 import Login from '../pages/Login'
@@ -36,7 +36,8 @@ export default function App() {
           <Route path="/volumes" element={<Volumes />} />
           <Route path="/appearance" element={<Appearance />} />
           <Route path="/profile" element={<Profile />} />
-          <Route path="/databases" element={<Databases />} />
+          <Route path="/integrations" element={<Integrations />} />
+          <Route path="/databases" element={<Integrations />} />
           <Route path="/files" element={<Files />} />
           <Route path="/admin" element={<Admin />} />
         </Route>
