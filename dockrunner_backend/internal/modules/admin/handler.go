@@ -90,3 +90,31 @@ func (h *Handler) RebootServer(c *gin.Context) {
 	}
 	response.OK(c, gin.H{"message": "reboot task sent"})
 }
+
+// UpdateContainerParams godoc
+// @Summary Обновить параметры запуска контейнера (админ)
+// @Tags admin
+// @Produce json
+// @Security BearerAuth
+// @Param id path string true "ID деплоя"
+// @Param body body map[string]any true "Параметры контейнера (image, cpu_cores, memory_gb, disk_gb, ports, env, volumes, restart_policy, expires_at)"
+// @Success 200 {object} response.Success
+// @Router /api/v1/admin/containers/{id}/params [put]
+func (h *Handler) UpdateContainerParams(c *gin.Context) {
+	id := c.Param("id")
+	var params map[string]any
+	if err := c.ShouldBindJSON(&params); err != nil {
+		response.BadRequest(c, "invalid request body")
+		return
+	}
+	if err := h.service.UpdateContainerParams(c.Request.Context(), id, params); err != nil {
+		h.logger.Error("update container params failed", zap.Error(err))
+		if errors.Is(err, oplock.ErrBusy) {
+			response.Conflict(c, err.Error())
+			return
+		}
+		response.Internal(c, "failed to update container params")
+		return
+	}
+	response.OK(c, gin.H{"message": "container params updated, recreate task sent"})
+}

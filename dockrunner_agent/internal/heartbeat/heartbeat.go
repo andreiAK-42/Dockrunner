@@ -35,27 +35,26 @@ type UserStorage struct {
 }
 
 type Report struct {
-	AgentID     string        `json:"agent_id"`
-	Hostname    string        `json:"hostname"`
-	Name        string        `json:"name"`
-	IP          string        `json:"ip"`
-	Description string        `json:"description"`
-	City        string        `json:"city"`
-	Lat         float64       `json:"lat"`
-	Lng         float64       `json:"lng"`
-	ApiURL      string        `json:"api_url"`
-	CPUPercent  float64       `json:"cpu_percent"`
-	CPUTotal    int           `json:"cpu_total"`
-	CPUMhz      int           `json:"cpu_mhz"`
-	MemUsedGB   float64       `json:"mem_used_gb"`
-	MemTotalGB  float64       `json:"mem_total_gb"`
-	MemSpeedMhz int           `json:"mem_speed_mhz"`
-	DiskUsedGB  float64       `json:"disk_used_gb"`
-	DiskTotalGB float64       `json:"disk_total_gb"`
-	Containers  int           `json:"containers"`
-	Storage     []UserStorage `json:"storage"`
-	NetDownMbps float64       `json:"net_down_mbps"`
-	NetUpMbps   float64       `json:"net_up_mbps"`
+	AgentID       string        `json:"agent_id"`
+	Hostname      string        `json:"hostname"`
+	IP            string        `json:"ip"`
+	Description   string        `json:"description"`
+	City          string        `json:"city"`
+	Lat           float64       `json:"lat"`
+	Lng           float64       `json:"lng"`
+	ApiURL        string        `json:"api_url"`
+	CPUPercent    float64       `json:"cpu_percent"`
+	CPUTotal      int           `json:"cpu_total"`
+	CPUMhz        int           `json:"cpu_mhz"`
+	MemUsedGB     float64       `json:"mem_used_gb"`
+	MemTotalGB    float64       `json:"mem_total_gb"`
+	MemSpeedMhz   int           `json:"mem_speed_mhz"`
+	DiskUsedGB    float64       `json:"disk_used_gb"`
+	DiskTotalGB   float64       `json:"disk_total_gb"`
+	Containers    int           `json:"containers"`
+	Storage       []UserStorage `json:"storage"`
+	NetDownMbps   float64       `json:"net_down_mbps"`
+	NetUpMbps     float64       `json:"net_up_mbps"`
 }
 
 func toGB(bytes float64) float64 {
@@ -112,7 +111,6 @@ func Collect(ctx context.Context, db *sql.DB, dock *docker.Client, cfg *config.C
 	report := Report{
 		AgentID:     cfg.AgentName,
 		Hostname:    hostname,
-		Name:        cfg.AgentName,
 		IP:          cfg.IP,
 		Description: cfg.AgentDescription,
 		City:        cfg.City,
@@ -351,6 +349,19 @@ func (e *statusError) Error() string {
 }
 
 func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, hostname string, db *sql.DB, dock *docker.Client) {
+	// Send the first heartbeat immediately so the central server receives the
+	// IP/location detected during agent startup without waiting one full interval.
+	send := func() {
+		report, err := Collect(ctx, db, dock, cfg, hostname)
+		if err != nil {
+			logger.Warn("heartbeat metrics collection failed", "error", err)
+		}
+		if err := sendOnce(ctx, cfg.CentralURL, cfg.Token, report); err != nil {
+			logger.Warn("heartbeat failed", "error", err)
+		}
+	}
+
+	send()
 	ticker := time.NewTicker(cfg.Heartbeat)
 	defer ticker.Stop()
 	for {
@@ -358,10 +369,7 @@ func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, hostnam
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			report, _ := Collect(ctx, db, dock, cfg, hostname)
-			if err := sendOnce(ctx, cfg.CentralURL, cfg.Token, report); err != nil {
-				logger.Warn("heartbeat failed", "error", err)
-			}
+			send()
 		}
 	}
 }

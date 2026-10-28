@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { Box, Typography, Card, CardContent, Grid, TextField, MenuItem, Button, Stack, Divider, FormControl, InputLabel, Select, Radio, RadioGroup, FormControlLabel, Alert, IconButton, CircularProgress, Snackbar } from '@mui/material'
+import { Box, Typography, Card, CardContent, Grid, TextField, MenuItem, Button, Stack, Divider, FormControl, InputLabel, Select, Radio, RadioGroup, FormControlLabel, Checkbox, Alert, IconButton, CircularProgress, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Save, GitBranch, CheckCircle2, Plus, Trash2, RefreshCw } from 'lucide-react'
 import ServerMap from '../../components/ServerMap'
@@ -225,6 +225,7 @@ export default function CreateApplication() {
   const navigate = useNavigate()
   const [appName, setAppName] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
+  const [branch, setBranch] = useState('')
   const [deploymentMode, setDeploymentMode] = useState<'automatic' | 'manual'>('automatic')
   const [selectedNodeId, setSelectedNodeId] = useState<string>('')
   const [ports, setPorts] = useState<PortRow[]>([{ host: '', container: '80' }])
@@ -234,6 +235,8 @@ export default function CreateApplication() {
   const [envConfigId, setEnvConfigId] = useState<string>('')
   const { configs } = useEnvConfigs()
   const [check, setCheck] = useState<CheckStatus | null>(null)
+  const [buildMode, setBuildMode] = useState<'dockerfile' | 'compose'>('dockerfile')
+  const [selectedServices, setSelectedServices] = useState<string[]>([])
   const [checking, setChecking] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [deploying, setDeploying] = useState(false)
@@ -241,6 +244,9 @@ export default function CreateApplication() {
   const [toast, setToast] = useState<{ severity: 'success' | 'error', message: string } | null>(null)
   const [requestSubmitted, setRequestSubmitted] = useState(false)
   const [requestId, setRequestId] = useState<string | null>(null)
+  const [showBuildModeDialog, setShowBuildModeDialog] = useState(false)
+  const [pendingBuildMode, setPendingBuildMode] = useState<'dockerfile' | 'compose'>('dockerfile')
+  const [pendingServices, setPendingServices] = useState<string[]>([])
   const cancelRef = useRef(false)
 
   // Resource request state
@@ -299,7 +305,8 @@ export default function CreateApplication() {
     }
     return check.services || []
   }, [check])
-  const serviceCount = composeServices.length > 0 ? composeServices.length : 1
+  const activeServices = buildMode === 'compose' ? selectedServices : []
+  const serviceCount = buildMode === 'compose' ? activeServices.length : 1
   const priceEstimate = useMemo(() => {
     const rate = rates.find((r) => r.agent_id === effectiveNodeId)
     if (!rate) {
@@ -384,9 +391,14 @@ export default function CreateApplication() {
   const handleCheck = async () => {
     const appNameFilled = appName.trim()
     const repoUrlFilled = repoUrl.trim()
+    const branchFilled = branch.trim()
 
     if (!appNameFilled || !repoUrlFilled) {
       setFormError('Укажите название приложения и ссылку на репозиторий')
+      return
+    }
+    if (!branchFilled) {
+      setFormError('Укажите ветку Git для деплоя')
       return
     }
     if (!effectiveNodeId) {
@@ -402,7 +414,7 @@ export default function CreateApplication() {
     const timer = setInterval(() => setElapsed((seconds) => seconds + 1), 1000)
 
     try {
-      const checkRes = await checkRepository({ app_name: appNameFilled, repo_url: repoUrlFilled, node_id: effectiveNodeId })
+      const checkRes = await checkRepository({ app_name: appNameFilled, repo_url: repoUrlFilled, node_id: effectiveNodeId, branch: branchFilled })
       const finishedCheck = await waitForCheck(checkRes.data.id, () => cancelRef.current)
       setCheck(finishedCheck)
       if (finishedCheck.status === 'ready') {
@@ -411,6 +423,11 @@ export default function CreateApplication() {
           finishedCheck.compose_file || '',
         ].filter(Boolean).join(' и ')
         setToast({ severity: 'success', message: found ? `Репозиторий проверен — найден ${found}` : 'Репозиторий проверен' })
+        // Show modal for build mode selection
+        const defaultMode = finishedCheck.compose_file ? 'compose' : 'dockerfile'
+        setPendingBuildMode(defaultMode)
+        setPendingServices(finishedCheck.services || [])
+        setShowBuildModeDialog(true)
       } else {
         setToast({ severity: 'error', message: finishedCheck.error || 'Проверка не пройдена' })
       }
@@ -441,8 +458,24 @@ export default function CreateApplication() {
     cancelRef.current = true
   }
 
+  const handleBuildModeConfirm = () => {
+    setBuildMode(pendingBuildMode)
+    setSelectedServices(pendingServices)
+    setShowBuildModeDialog(false)
+  }
+
+  const handleBuildModeCancel = () => {
+    setShowBuildModeDialog(false)
+    // Reset check so user can re-check if needed
+    setCheck(null)
+  }
+
   const handleDeploy = async () => {
     if (!check || !isReady) {
+      return
+    }
+    if (buildMode === 'compose' && selectedServices.length === 0) {
+      setFormError('Выберите хотя бы один сервис Docker Compose')
       return
     }
 
@@ -485,7 +518,9 @@ export default function CreateApplication() {
         memory_gb: memoryGB,
         disk_gb: diskGB,
         duration_hours: durationHours,
-        services: composeServices,
+        build_mode: buildMode,
+        services: activeServices,
+        branch: branch.trim(),
       })
 
       setRequestSubmitted(true)
@@ -511,6 +546,7 @@ export default function CreateApplication() {
             <Grid container spacing={3}>
               <Grid size={{ xs: 12 }}><TextField fullWidth label="Название приложения" placeholder="например, my-awesome-app" value={appName} onChange={(e) => setAppName(e.target.value)} helperText="Название станет именем контейнера" /></Grid>
               <Grid size={{ xs: 12 }}><TextField fullWidth label="Ссылка на Git-репозиторий" placeholder="https://github.com/org/repo" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} helperText="Сервер склонирует проект в папку пользователя и проверит Dockerfile или docker-compose в корне" /></Grid>
+              <Grid size={{ xs: 12 }}><TextField fullWidth label="Ветка Git" placeholder="main" value={branch} onChange={(e) => setBranch(e.target.value)} helperText="Обязательное поле — укажите ветку для деплоя (например, main, master, develop)" /></Grid>
             </Grid>
           </Grid>
           <Grid size={{ xs: 12 }}><Divider /></Grid>
@@ -544,12 +580,6 @@ export default function CreateApplication() {
               <Box className={styles.mapWrap}><ServerMap nodes={nodes} selectedNodeId={selectedNodeId} onSelectNode={(node) => setSelectedNodeId(node.id)} /></Box>
             )}
             {deploymentMode === 'manual' && selectedNodeId && <Typography variant="body2" className={styles.alert} color="text.secondary">Выбран узел: <b>{getWorkerName(onlineNodes, selectedNodeId)}</b></Typography>}
-
-            {isReady && composeServices.length > 0 && (
-              <Alert severity="info" icon={<CheckCircle2 size={18} />} sx={{ mt: 2 }}>
-                Будет запущено контейнеров: {composeServices.length} ({composeServices.map((s) => `${appName.trim()}-${s}`).join(', ')}). Лимиты действуют на каждый контейнер.
-              </Alert>
-            )}
             {formError && <Alert severity="error" sx={{ mt: 2 }}>{formError}</Alert>}
           </Grid>
           <Grid size={{ xs: 12 }}><Divider /></Grid>
@@ -677,6 +707,50 @@ export default function CreateApplication() {
           <Button variant="contained" color="primary" startIcon={<GitBranch size={18} />} onClick={handleCheck}>Проверить репозиторий</Button>
         )}
       </Box>
+      <Dialog open={showBuildModeDialog} onClose={handleBuildModeCancel} maxWidth="md" fullWidth>
+        <DialogTitle>Выбор способа сборки и запуска</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" paragraph>
+            Репозиторий проверен. Выберите способ сборки:
+          </Typography>
+          <RadioGroup value={pendingBuildMode} onChange={(e) => setPendingBuildMode(e.target.value as 'dockerfile' | 'compose')}>
+            {check?.detected_dockerfile && <FormControlLabel value="dockerfile" control={<Radio />} label="Dockerfile — один контейнер" />}
+            {!!check?.compose_file && <FormControlLabel value="compose" control={<Radio />} label={`Docker Compose — ${check.compose_file}`} />}
+          </RadioGroup>
+          {pendingBuildMode === 'compose' && pendingServices.length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Выберите сервисы, которые нужно запустить:
+              </Typography>
+              {pendingServices.map((service) => (
+                <FormControlLabel
+                  key={service}
+                  sx={{ display: 'flex' }}
+                  control={
+                    <Checkbox
+                      checked={pendingServices.includes(service)}
+                      onChange={(e) =>
+                        setPendingServices((prev) =>
+                          e.target.checked ? [...prev, service] : prev.filter((item) => item !== service)
+                        )
+                      }
+                    />
+                  }
+                  label={service}
+                />
+              ))}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleBuildModeCancel} variant="outlined">
+            Отмена
+          </Button>
+          <Button onClick={handleBuildModeConfirm} variant="contained" color="primary" disabled={pendingBuildMode === 'compose' && pendingServices.length === 0}>
+            Подтвердить
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Snackbar
         open={toast !== null}
         autoHideDuration={6000}

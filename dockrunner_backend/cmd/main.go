@@ -211,6 +211,9 @@ func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Po
 
 	containersService := containers.NewService(adminRepo, agentsRepo, volumesService, cfg.AgentToken, queueClient, zlog, ops, containers.PortsPolicy{Min: cfg.PortsMin, Max: cfg.PortsMax})
 
+	// Start disk usage monitor
+	containersService.StartDiskMonitor(ctx, containers.DefaultDiskMonitorConfig())
+
 	// Deployment Requests
 	deploymentRequestsRepo := deploymentrequests.NewRepository(pg, zlog)
 

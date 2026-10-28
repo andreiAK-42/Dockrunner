@@ -29,11 +29,15 @@ export interface AdminContainer {
   image: string
   status: string
   node_id: string
+  node_ip?: string
   ports: { host_port: number; container_port: number }[]
+  volumes: { name?: string; host_path?: string; container_path: string }[]
+  env: Record<string, string>
   cpu_cores?: number
   memory_gb?: number
   disk_gb?: number
   expires_at?: string | null
+  restart_policy?: string
 }
 
 export interface DeploymentRequest {
@@ -149,6 +153,23 @@ export function adminContainerAction(id: string, action: 'stop' | 'restart' | 'r
 
 export function rebootServer(id: string) {
   return apiRequest(`/api/v1/admin/servers/${id}/reboot`, { method: 'POST' })
+}
+
+export function adminUpdateContainerParams(id: string, params: {
+  image?: string
+  cpu_cores?: number
+  memory_gb?: number
+  disk_gb?: number
+  ports?: { host_port: number; container_port: number }[]
+  env?: Record<string, string>
+  volumes?: { name?: string; host_path?: string; container_path: string }[]
+  restart_policy?: string
+  expires_at?: string | null
+}) {
+  return apiRequest(`/api/v1/admin/containers/${id}/params`, {
+    method: 'PUT',
+    body: params,
+  })
 }
 
 // Deployment Requests

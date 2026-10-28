@@ -66,7 +66,10 @@ type Task struct {
 	MemoryGB float64 `json:"memory_gb"`
 	DiskGB   float64 `json:"disk_gb"`
 	// Services — сервисы compose для запуска (пусто = автоопределение из репозитория).
-	Services []string `json:"services"`
+	Services  []string `json:"services"`
+	BuildMode string   `json:"build_mode"`
+	// Branch — git branch to clone (required if repo_url is set).
+	Branch string `json:"branch"`
 }
 
 type Event struct {
@@ -359,7 +362,7 @@ func (h *Handler) prepare(ctx context.Context, task Task) error {
 		fail("папка проекта повреждена (нет .git) — удалите её на воркере: " + dir)
 		return nil
 	}
-	if err := git.EnsureCloned(ctx, task.RepoURL, dir); err != nil {
+	if err := git.EnsureCloned(ctx, task.RepoURL, dir, task.Branch); err != nil {
 		fail("репозиторий не склонирован: " + err.Error())
 		return err
 	}
@@ -521,22 +524,42 @@ func (h *Handler) deploy(ctx context.Context, task Task) error {
 	if err != nil {
 		return h.failDeploy(ctx, task, err.Error(), err)
 	}
-	if err := git.EnsureCloned(ctx, task.RepoURL, dir); err != nil {
+	if err := git.EnsureCloned(ctx, task.RepoURL, dir, task.Branch); err != nil {
 		return h.failDeploy(ctx, task, "репозиторий не склонирован: "+err.Error(), err)
 	}
 	dockerfile, compose := git.Detect(dir)
 	if dockerfile == "" && compose == "" {
 		return h.failDeploy(ctx, task, errNoDockerfile.Error(), errNoDockerfile)
 	}
-	// Обычный Dockerfile: один контейнер как раньше.
-	if dockerfile != "" {
+	// Режим явно выбран пользователем. Для старых задач без build_mode сохраняем прежнее автоопределение.
+	mode := task.BuildMode
+	if mode == "" {
+		if compose != "" && len(task.Services) > 0 {
+			mode = "compose"
+		} else {
+			mode = "dockerfile"
+		}
+	}
+	if mode == "dockerfile" {
+		if dockerfile == "" {
+			return h.failDeploy(ctx, task, "выбран Dockerfile, но файл не найден", errNoDockerfile)
+		}
 		tag := "app-" + shortID(task.DeploymentID) + ":latest"
 		if err := h.buildDockerfile(ctx, task, dir, dockerfile, tag); err != nil {
 			return h.failDeploy(ctx, task, "образ не собран: "+err.Error(), err)
 		}
 		return h.deploySingle(ctx, task, tag, task.AppName, task.DeploymentID, task.Ports, task.ContainerName, "", "", "", "")
 	}
-	return h.deployCompose(ctx, task, dir, compose)
+	if mode == "compose" {
+		if compose == "" {
+			return h.failDeploy(ctx, task, "выбран Docker Compose, но compose-файл не найден", errNoDockerfile)
+		}
+		if len(task.Services) == 0 {
+			return h.failDeploy(ctx, task, "для Docker Compose необходимо выбрать хотя бы один сервис", errComposeEmpty)
+		}
+		return h.deployCompose(ctx, task, dir, compose)
+	}
+	return h.failDeploy(ctx, task, "неизвестный режим сборки: "+mode, errNoDockerfile)
 }
 
 // deploySingle запускает один контейнер с лимитами и сообщает центру.
@@ -570,6 +593,7 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		RestartPolicy: task.Restart,
 		CPUCores:      task.CPUCores,
 		MemoryGB:      task.MemoryGB,
+		DiskGB:        task.DiskGB, // лимит диска (overlay2.size)
 		Network:       network,
 	})
 	if err != nil {
@@ -596,6 +620,7 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		ParentID:  parentID,
 		ParentApp: parentApp,
 		Service:   service,
+		Branch:    task.Branch,
 	})
 
 	ev := appEvent("deploy.completed", task, "приложение запущено")
@@ -713,6 +738,8 @@ func (h *Handler) refresh(ctx context.Context, task Task) error {
 			Restart:      "unless-stopped",
 			CPUCores:     dep.CPUCores,
 			MemoryGB:     dep.MemoryGB,
+			DiskGB:       dep.DiskGB,
+			Branch:       dep.Branch,
 		})
 	}
 	return h.deploy(ctx, Task{
@@ -729,6 +756,8 @@ func (h *Handler) refresh(ctx context.Context, task Task) error {
 		Restart:       "unless-stopped",
 		CPUCores:      dep.CPUCores,
 		MemoryGB:      dep.MemoryGB,
+		DiskGB:        dep.DiskGB,
+		Branch:        dep.Branch,
 	})
 }
 

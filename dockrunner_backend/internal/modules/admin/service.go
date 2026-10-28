@@ -93,6 +93,53 @@ func (s *Service) RebootServer(ctx context.Context, id string) error {
 	return s.queue.Publish(ctx, "agent."+id, body)
 }
 
+// UpdateContainerParams updates container parameters and triggers a recreate
+// with the new parameters. This is an admin-only operation.
+func (s *Service) UpdateContainerParams(ctx context.Context, id string, params map[string]any) error {
+	if s.queue == nil {
+		return errors.New("queue unavailable")
+	}
+
+	rec, err := s.repo.GetContainer(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	// Acquire operation lock
+	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, "admin_update"); err != nil {
+		return err
+	}
+	defer s.ops.Release(rec.OwnerLogin, rec.AppName)
+
+	// Update the database with new parameters
+	if err := s.repo.UpdateContainerParams(ctx, id, params); err != nil {
+		return err
+	}
+
+	// Send recreate task to agent with new parameters
+	// We need to fetch the current full spec and merge with new params
+	body, _ := json.Marshal(map[string]any{
+		"type":           "recreate",
+		"deployment_id":  rec.ID,
+		"app_name":       rec.AppName,
+		"owner":          rec.OwnerLogin,
+		"image":          params["image"],
+		"cpu_cores":      params["cpu_cores"],
+		"memory_gb":      params["memory_gb"],
+		"disk_gb":        params["disk_gb"],
+		"ports":          params["ports"],
+		"env":            params["env"],
+		"volumes":        params["volumes"],
+		"restart_policy": params["restart_policy"],
+	})
+
+	if err := s.queue.Publish(ctx, "agent."+rec.NodeID, body); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 type AgentEvent struct {
 	Type               string        `json:"type"`
 	AgentID            string        `json:"agent_id"`
@@ -117,7 +164,7 @@ func (e AgentEvent) OpApp() string {
 	return e.AppName
 }
 
-// mergeResources подтягивает лимиты/expires из ранее созданной записи Run,
+// mergeResources подтягивает лимиты/expires и параметры запуска из ранее созданной записи Run,
 // чтобы deploy.completed не затирал их нулями.
 func (s *Service) mergeResources(ctx context.Context, c ContainerRecord) ContainerRecord {
 	if existing, err := s.repo.GetContainer(ctx, c.ID); err == nil && existing != nil {
@@ -125,6 +172,10 @@ func (s *Service) mergeResources(ctx context.Context, c ContainerRecord) Contain
 		c.MemoryGB = existing.MemoryGB
 		c.DiskGB = existing.DiskGB
 		c.ExpiresAt = existing.ExpiresAt
+		// Preserve launch parameters that are not returned by the agent
+		c.Volumes = existing.Volumes
+		c.Env = existing.Env
+		c.RestartPolicy = existing.RestartPolicy
 	}
 	return c
 }

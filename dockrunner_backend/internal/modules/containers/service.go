@@ -48,6 +48,7 @@ type ContainerStore interface {
 	FindLatestByApp(ctx context.Context, owner, appName string) (*admin.ContainerRecord, error)
 	ListByOwner(ctx context.Context, owner string) ([]admin.ContainerRecord, error)
 	ListByNode(ctx context.Context, nodeID string) ([]admin.ContainerRecord, error)
+	ListContainers(ctx context.Context) ([]admin.ContainerRecord, error)
 	SetContainerStatus(ctx context.Context, id, status string) error
 	UpsertContainer(ctx context.Context, c admin.ContainerRecord) error
 }
@@ -174,6 +175,32 @@ func (s *Service) checkPorts(ctx context.Context, nodeID string, ports []PortSpe
 	return nil
 }
 
+// validateResources проверяет, что запрошенные ресурсы не превышают емкость узла.
+func (s *Service) validateResources(ctx context.Context, nodeID string, cpuCores, memoryGB, diskGB float64) error {
+	agents, err := s.agents.List(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list agents: %w", err)
+	}
+	for _, a := range agents {
+		if a.ID == nodeID {
+			// Check CPU (convert cpuCores to cores, agent has CPUTotal in cores)
+			if cpuCores > float64(a.CPUTotal) {
+				return fmt.Errorf("requested CPU %.2f cores exceeds node capacity %d cores", cpuCores, a.CPUTotal)
+			}
+			// Check Memory
+			if memoryGB > a.MemTotalGB {
+				return fmt.Errorf("requested memory %.2f GB exceeds node capacity %.2f GB", memoryGB, a.MemTotalGB)
+			}
+			// Check Disk
+			if diskGB > a.DiskTotalGB {
+				return fmt.Errorf("requested disk %.2f GB exceeds node capacity %.2f GB", diskGB, a.DiskTotalGB)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("node %s not found", nodeID)
+}
+
 func (s *Service) Mine(ctx context.Context, owner string) ([]admin.ContainerRecord, error) {
 	return s.store.ListByOwner(ctx, owner)
 }
@@ -213,6 +240,97 @@ func (s *Service) agentGet(ctx context.Context, nodeID, suffix string) ([]byte, 
 	return body, nil
 }
 
+func (s *Service) agentPost(ctx context.Context, nodeID, suffix string, payload any) ([]byte, error) {
+	apiURL, err := s.agents.AgentApiURL(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if apiURL == "" {
+		return nil, agents.ErrNoAPIURL
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, trimSlash(apiURL)+suffix, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.agentToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.agentToken)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agent unreachable: %w", err)
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode >= 300 {
+		return nil, fmt.Errorf("agent error: %s", strings.TrimSpace(string(data)))
+	}
+	return data, nil
+}
+
+func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec map[string]any) ([]byte, error) {
+	rec, err := s.store.GetContainer(ctx, id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
+		return nil, ErrNotFound
+	}
+	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, "recreate"); err != nil {
+		return nil, err
+	}
+	defer s.ops.Release(rec.OwnerLogin, rec.AppName)
+	responseBody, err := s.agentPost(ctx, rec.NodeID, "/containers/"+id+"/recreate", spec)
+	if err != nil {
+		return nil, err
+	}
+	// Keep the central list in sync with the live container specification.
+	var updated struct {
+		Image          string `json:"image"`
+		Ports          []struct {
+			Host      int `json:"host"`
+			Container int `json:"container"`
+		} `json:"ports"`
+		Volumes        []admin.VolumeSpec `json:"volumes"`
+		Env            map[string]string  `json:"env"`
+		RestartPolicy  string             `json:"restart_policy"`
+	}
+	if raw, marshalErr := json.Marshal(spec); marshalErr == nil {
+		_ = json.Unmarshal(raw, &updated)
+	}
+	if updated.Image != "" {
+		rec.Image = updated.Image
+	}
+	rec.Status = "running"
+	rec.Ports = make([]admin.PortMapping, 0, len(updated.Ports))
+	for _, p := range updated.Ports {
+		rec.Ports = append(rec.Ports, admin.PortMapping{HostPort: p.Host, ContainerPort: p.Container})
+	}
+	// Update volumes, env, restart_policy from spec if provided
+	if len(updated.Volumes) > 0 {
+		rec.Volumes = updated.Volumes
+	}
+	if len(updated.Env) > 0 {
+		rec.Env = updated.Env
+	}
+	if updated.RestartPolicy != "" {
+		rec.RestartPolicy = updated.RestartPolicy
+	}
+	if err := s.store.UpsertContainer(ctx, *rec); err != nil {
+		s.logger.Warn("container recreated but central record update failed", zap.String("container", id), zap.Error(err))
+	}
+	return responseBody, nil
+}
+
 func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, error) {
 	rec, err := s.store.GetContainer(ctx, id)
 	if err != nil {
@@ -221,7 +339,29 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
 		return nil, ErrNotFound
 	}
-	return s.agentGet(ctx, rec.NodeID, "/containers/"+id+"/spec")
+
+	// Try to get spec from agent with the given ID
+	body, err := s.agentGet(ctx, rec.NodeID, "/containers/"+id+"/spec")
+	if err == nil {
+		return body, nil
+	}
+
+	// If the ID looks like a multi-service container (contains -serviceName),
+	// try to get spec from the parent deployment ID
+	if strings.Contains(id, "-") {
+		parts := strings.Split(id, "-")
+		if len(parts) >= 2 {
+			parentID := strings.Join(parts[:len(parts)-1], "-")
+			if parentID != id {
+				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, "/containers/"+parentID+"/spec")
+				if parentErr == nil {
+					return parentBody, nil
+				}
+			}
+		}
+	}
+
+	return nil, err
 }
 
 type ContainerStats struct {
@@ -237,15 +377,59 @@ func (s *Service) ContainerStats(ctx context.Context, owner, id string) (*Contai
 	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
 		return nil, ErrNotFound
 	}
+
+	// Try to get stats from agent with the given ID
 	body, err := s.agentGet(ctx, rec.NodeID, "/containers/"+id+"/stats")
+	if err == nil {
+		var stats ContainerStats
+		if err := json.Unmarshal(body, &stats); err != nil {
+			return nil, err
+		}
+		return &stats, nil
+	}
+
+	// If the ID looks like a multi-service container (contains -serviceName),
+	// try to get stats from the parent deployment ID
+	if strings.Contains(id, "-") {
+		parts := strings.Split(id, "-")
+		if len(parts) >= 2 {
+			parentID := strings.Join(parts[:len(parts)-1], "-")
+			if parentID != id {
+				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, "/containers/"+parentID+"/stats")
+				if parentErr == nil {
+					var stats ContainerStats
+					if err := json.Unmarshal(parentBody, &stats); err != nil {
+						return nil, err
+					}
+					return &stats, nil
+				}
+			}
+		}
+	}
+
+	return nil, err
+}
+
+// ContainerSizeInfo represents disk usage info for a container from the agent.
+type ContainerSizeInfo struct {
+	DeploymentID string `json:"deployment_id"`
+	ContainerID  string `json:"container_id"`
+	SizeBytes    int64  `json:"size_bytes"`
+}
+
+// GetContainerSizes retrieves disk usage (writable layer size) for all containers on a node.
+func (s *Service) GetContainerSizes(ctx context.Context, nodeID string) ([]ContainerSizeInfo, error) {
+	body, err := s.agentGet(ctx, nodeID, "/containers/sizes")
 	if err != nil {
 		return nil, err
 	}
-	var stats ContainerStats
-	if err := json.Unmarshal(body, &stats); err != nil {
+	var payload struct {
+		Data []ContainerSizeInfo `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
-	return &stats, nil
+	return payload.Data, nil
 }
 
 func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int) (string, error) {
@@ -259,17 +443,41 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 	if tail <= 0 || tail > 10000 {
 		tail = 200
 	}
+
+	// Try to get logs from agent with the given ID
 	body, err := s.agentGet(ctx, rec.NodeID, fmt.Sprintf("/containers/%s/logs?tail=%d", id, tail))
-	if err != nil {
-		return "", err
+	if err == nil {
+		var payload struct {
+			Data string `json:"data"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return "", err
+		}
+		return payload.Data, nil
 	}
-	var payload struct {
-		Data string `json:"data"`
+
+	// If the ID looks like a multi-service container (contains -serviceName),
+	// try to get logs from the parent deployment ID
+	if strings.Contains(id, "-") {
+		parts := strings.Split(id, "-")
+		if len(parts) >= 2 {
+			parentID := strings.Join(parts[:len(parts)-1], "-")
+			if parentID != id {
+				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, fmt.Sprintf("/containers/%s/logs?tail=%d", parentID, tail))
+				if parentErr == nil {
+					var payload struct {
+						Data string `json:"data"`
+					}
+					if err := json.Unmarshal(parentBody, &payload); err != nil {
+						return "", err
+					}
+					return payload.Data, nil
+				}
+			}
+		}
 	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", err
-	}
-	return payload.Data, nil
+
+	return "", err
 }
 
 func trimSlash(s string) string {
@@ -279,7 +487,7 @@ func trimSlash(s string) string {
 	return s
 }
 
-func (s *Service) StartCheck(ctx context.Context, owner, appName, repoURL, nodeID string) (*Check, error) {
+func (s *Service) StartCheck(ctx context.Context, owner, appName, repoURL, nodeID, branch string) (*Check, error) {
 	if s.queue == nil {
 		return nil, ErrNoQueue
 	}
@@ -308,6 +516,7 @@ func (s *Service) StartCheck(ctx context.Context, owner, appName, repoURL, nodeI
 		"app_name":      appName,
 		"owner":         owner,
 		"repo_url":      repoURL,
+		"branch":        branch,
 	})
 	if err := s.queue.Publish(ctx, "agent."+nodeID, body); err != nil {
 		s.mu.Lock()
@@ -408,9 +617,12 @@ type RunInput struct {
 	MemoryGB      float64           `json:"memory_gb"`
 	DiskGB        float64           `json:"disk_gb"`
 	DurationHours float64           `json:"duration_hours"`
+	// Branch — git branch to deploy (required when repo_url is set)
+	Branch      string            `json:"branch"`
 	// Services — сервисы compose (пусто = один контейнер).
 	// Каждый сервис станет записью «приложение-сервис» с теми же лимитами.
-	Services []string `json:"services"`
+	Services  []string `json:"services"`
+	BuildMode string   `json:"build_mode"`
 }
 
 func (s *Service) Run(ctx context.Context, owner string, in RunInput) (string, error) {
@@ -421,6 +633,14 @@ func (s *Service) Run(ctx context.Context, owner string, in RunInput) (string, e
 		return "", errors.New("repo_url or image is required")
 	}
 	if err := s.requireOnlineNode(ctx, in.NodeID); err != nil {
+		return "", err
+	}
+	// For multi-service, limits apply per service
+	serviceCount := 1
+	if len(in.Services) > 0 {
+		serviceCount = len(in.Services)
+	}
+	if err := s.validateResources(ctx, in.NodeID, in.CPUCores*float64(serviceCount), in.MemoryGB*float64(serviceCount), in.DiskGB*float64(serviceCount)); err != nil {
 		return "", err
 	}
 	unlockNode := s.lockNode(in.NodeID)
@@ -455,6 +675,8 @@ func (s *Service) Run(ctx context.Context, owner string, in RunInput) (string, e
 		"disk_gb":        in.DiskGB,
 		"duration_hours": in.DurationHours,
 		"services":       in.Services,
+		"build_mode":     in.BuildMode,
+		"branch":         in.Branch,
 	})
 	if err := s.queue.Publish(ctx, "agent."+in.NodeID, body); err != nil {
 		s.ops.Release(owner, in.AppName)
@@ -631,4 +853,280 @@ func (s *Service) AgentBuildLogStreamURL(ctx context.Context, nodeID, deployment
 		ws = "ws://" + strings.TrimPrefix(ws, "http://")
 	}
 	return trimSlash(ws) + "/deployments/" + deploymentID + "/build-log/stream?token=" + url.QueryEscape(s.agentToken), nil
+}
+
+// AdminStopContainer stops a container by deployment ID (admin level, no owner check).
+// Used by disk monitor and admin actions.
+func (s *Service) AdminStopContainer(ctx context.Context, id string) error {
+	if s.queue == nil {
+		return ErrNoQueue
+	}
+	rec, err := s.store.GetContainer(ctx, id)
+	if err != nil {
+		return ErrNotFound
+	}
+	body, _ := json.Marshal(map[string]string{
+		"type":          "stop",
+		"deployment_id": rec.ID,
+		"app_id":        rec.AppID,
+		"app_name":      rec.AppName,
+		"owner":         rec.OwnerLogin,
+	})
+	if err := s.queue.Publish(ctx, "agent."+rec.NodeID, body); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DiskMonitorConfig configures the disk usage monitor.
+type DiskMonitorConfig struct {
+	CheckInterval time.Duration // how often to check (default 5m)
+	GracePercent  float64       // extra percentage before enforcement (default 0.1 = 10%)
+}
+
+// DefaultDiskMonitorConfig returns sensible defaults.
+func DefaultDiskMonitorConfig() DiskMonitorConfig {
+	return DiskMonitorConfig{
+		CheckInterval: 5 * time.Minute,
+		GracePercent:  0.1, // 10% grace
+	}
+}
+
+// StartDiskMonitor starts a background goroutine that periodically checks
+// container disk usage against their DiskGB limits and stops containers
+// that exceed their limit (with grace percentage).
+func (s *Service) StartDiskMonitor(ctx context.Context, cfg DiskMonitorConfig) {
+	if cfg.CheckInterval <= 0 {
+		cfg = DefaultDiskMonitorConfig()
+	}
+	go func() {
+		ticker := time.NewTicker(cfg.CheckInterval)
+		defer ticker.Stop()
+		s.logger.Info("disk monitor started", zap.Duration("interval", cfg.CheckInterval))
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Info("disk monitor stopped")
+				return
+			case <-ticker.C:
+				s.checkDiskUsage(ctx, cfg.GracePercent)
+			}
+		}
+	}()
+}
+
+// RequestContainerUpdate creates a deployment request for updating container parameters.
+// This is called by users when they want to change container settings.
+// The request needs admin approval before the container is recreated with new params.
+// Returns the request ID.
+func (s *Service) RequestContainerUpdate(ctx context.Context, owner, deploymentID string, params map[string]any) (string, error) {
+	rec, err := s.store.GetContainer(ctx, deploymentID)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
+		return "", ErrNotFound
+	}
+
+	// Acquire operation lock to prevent concurrent operations
+	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, "request_update"); err != nil {
+		return "", err
+	}
+	defer s.ops.Release(rec.OwnerLogin, rec.AppName)
+
+	// Create the deployment request directly in the database
+	// Use the admin repository's pool to do a direct insert
+	requestID := uuid.NewString()
+
+	// Build ports - use direct marshal since rec.Ports is now []PortMapping
+	portsVal := getOrDefault(params, "ports", rec.Ports)
+	portsJSON, _ := json.Marshal(portsVal)
+
+	// Build volumes - use direct marshal since rec.Volumes is now []VolumeSpec
+	volumesVal := getOrDefault(params, "volumes", rec.Volumes)
+	volumesJSON, _ := json.Marshal(volumesVal)
+
+	// Build env - use direct marshal since rec.Env is now map[string]string
+	envVal := getOrDefault(params, "env", rec.Env)
+	envJSON, _ := json.Marshal(envVal)
+
+	// Build services JSON (empty for updates)
+	servicesJSON := "[]"
+
+	// Get restart_policy (default to "unless-stopped" if not specified)
+	restartPolicy := getOrDefaultString(params, "restart_policy", "unless-stopped")
+
+	// Insert into launch_requests table
+	_, err = s.store.(*admin.Repository).Pool().Exec(ctx, `
+		INSERT INTO launch_requests
+		(id, owner_login, app_name, repo_url, image, container_name, node_id, ports, volumes, env, cpu_cores, memory_gb, disk_gb, duration_hours, branch, services, build_mode, price, status, type, existing_deployment_id, restart_policy, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now(),now())`,
+		requestID, rec.OwnerLogin, rec.AppName, "", // repo_url empty for updates
+		getOrDefaultString(params, "image", rec.Image),
+		rec.AppName, // container_name = app_name
+		rec.NodeID,
+		string(portsJSON),
+		string(volumesJSON),
+		string(envJSON),
+		getOrDefaultFloat64(params, "cpu_cores", rec.CPUCores),
+		getOrDefaultFloat64(params, "memory_gb", rec.MemoryGB),
+		getOrDefaultFloat64(params, "disk_gb", rec.DiskGB),
+		0, // duration_hours not applicable for updates
+		"", // branch empty for updates
+		servicesJSON,
+		"", // build_mode empty for updates
+		0, // price = 0 for updates
+		"pending",
+		"update",
+		deploymentID,
+		restartPolicy,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	return requestID, nil
+}
+
+// Helper methods to convert to JSON
+func (s *Service) convertPortsToJSON(ports any) []map[string]any {
+	if portArr, ok := ports.([]admin.PortMapping); ok {
+		result := make([]map[string]any, 0, len(portArr))
+		for _, p := range portArr {
+			result = append(result, map[string]any{
+				"host_port":      p.HostPort,
+				"container_port": p.ContainerPort,
+			})
+		}
+		return result
+	}
+	if portArr, ok := ports.([]any); ok {
+		result := make([]map[string]any, 0, len(portArr))
+		for _, item := range portArr {
+			if m, ok := item.(map[string]any); ok {
+				result = append(result, m)
+			}
+		}
+		return result
+	}
+	return []map[string]any{}
+}
+
+func (s *Service) convertVolumesToJSON(volumes any) []map[string]any {
+	if volStr, ok := volumes.(string); ok {
+		var result []map[string]any
+		_ = json.Unmarshal([]byte(volStr), &result)
+		return result
+	}
+	if volArr, ok := volumes.([]any); ok {
+		result := make([]map[string]any, 0, len(volArr))
+		for _, item := range volArr {
+			if m, ok := item.(map[string]any); ok {
+				result = append(result, m)
+			}
+		}
+		return result
+	}
+	return []map[string]any{}
+}
+
+func getOrDefaultString(params map[string]any, key, defaultVal string) string {
+	if val, ok := params[key]; ok && val != nil {
+		if s, ok := val.(string); ok {
+			return s
+		}
+	}
+	return defaultVal
+}
+
+func getOrDefaultFloat64(params map[string]any, key string, defaultVal float64) float64 {
+	if val, ok := params[key]; ok && val != nil {
+		switch v := val.(type) {
+		case float64:
+			return v
+		case int:
+			return float64(v)
+		case int64:
+			return float64(v)
+		}
+	}
+	return defaultVal
+}
+
+// getOrDefault returns the value from params if present, otherwise returns defaultVal
+func getOrDefault(params map[string]any, key string, defaultVal any) any {
+	if val, ok := params[key]; ok && val != nil {
+		return val
+	}
+	return defaultVal
+}
+
+// checkDiskUsage queries all nodes for container sizes and stops containers
+// exceeding their DiskGB limit (with grace).
+func (s *Service) checkDiskUsage(ctx context.Context, gracePercent float64) {
+	// Get all running containers from the database
+	containers, err := s.store.ListContainers(ctx)
+	if err != nil {
+		s.logger.Warn("disk monitor: failed to list containers", zap.Error(err))
+		return
+	}
+	if len(containers) == 0 {
+		return
+	}
+
+	// Group containers by node
+	byNode := make(map[string][]admin.ContainerRecord)
+	for _, c := range containers {
+		if c.Status == "running" && c.DiskGB > 0 && c.NodeID != "" {
+			byNode[c.NodeID] = append(byNode[c.NodeID], c)
+		}
+	}
+
+	// Check each node
+	for nodeID, nodeContainers := range byNode {
+		sizes, err := s.GetContainerSizes(ctx, nodeID)
+		if err != nil {
+			s.logger.Warn("disk monitor: failed to get container sizes", zap.String("node", nodeID), zap.Error(err))
+			continue
+		}
+
+		// Build map of container ID -> size
+		sizeMap := make(map[string]int64)
+		for _, sz := range sizes {
+			sizeMap[sz.ContainerID] = sz.SizeBytes
+		}
+
+		// Check each container
+		for _, rec := range nodeContainers {
+			// Find the container ID in the agent's list
+			// The record ID is the deployment ID, but we need the Docker container ID
+			// We'll need to look it up from the agent or store it
+			// For now, we use the record ID as deployment ID and match with agent's deployment_id
+			sizeBytes := sizeMap[rec.ID]
+			if sizeBytes == 0 {
+				// Try to find by container name or check if it's a service container
+				continue
+			}
+
+			limitBytes := int64(rec.DiskGB * 1024 * 1024 * 1024)
+			graceLimit := int64(float64(limitBytes) * (1 + gracePercent))
+
+			if sizeBytes > graceLimit {
+				s.logger.Warn("disk monitor: container exceeds disk limit, stopping",
+					zap.String("deployment", rec.ID),
+					zap.String("app", rec.AppName),
+					zap.Float64("limit_gb", rec.DiskGB),
+					zap.Int64("used_bytes", sizeBytes),
+					zap.Int64("limit_bytes", limitBytes),
+				)
+
+				if err := s.AdminStopContainer(ctx, rec.ID); err != nil {
+					s.logger.Error("disk monitor: failed to stop container",
+						zap.String("deployment", rec.ID), zap.Error(err))
+				} else {
+					_ = s.store.SetContainerStatus(ctx, rec.ID, "disk_exceeded")
+				}
+			}
+		}
+	}
 }

@@ -66,11 +66,20 @@ export default function Admin() {
       fetchAdminContainers().then((latest) => {
         if (active) setContainers(latest)
       }).catch(() => {
+        // Не показываем ошибку при единичном сбое фонового обновления.
       })
     }, 5000)
+
+    // Listen for custom reload event from container edit dialog
+    const handleReload = () => {
+      if (active) reloadAll()
+    }
+    window.addEventListener('admin-data-reload', handleReload)
+
     return () => {
       active = false
       window.clearInterval(timer)
+      window.removeEventListener('admin-data-reload', handleReload)
     }
   }, [])
 

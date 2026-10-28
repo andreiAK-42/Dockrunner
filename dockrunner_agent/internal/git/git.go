@@ -23,24 +23,33 @@ func run(ctx context.Context, dir, name string, args ...string) error {
 	return nil
 }
 
-func EnsureCloned(ctx context.Context, repoURL, dir string) error {
+func EnsureCloned(ctx context.Context, repoURL, dir, branch string) error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return errors.New("git not installed")
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-		return syncExisting(ctx, repoURL, dir)
+		return syncExisting(ctx, repoURL, dir, branch)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err
 	}
-	return run(ctx, "", "git", "clone", "--depth", "1", repoURL, dir)
+	args := []string{"clone", "--depth", "1"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, repoURL, dir)
+	return run(ctx, "", "git", args...)
 }
 
-func syncExisting(ctx context.Context, repoURL, dir string) error {
+func syncExisting(ctx context.Context, repoURL, dir, branch string) error {
 	if err := run(ctx, dir, "git", "remote", "set-url", "origin", repoURL); err != nil {
 		return err
 	}
-	if err := run(ctx, dir, "git", "fetch", "--depth", "1", "origin", "HEAD"); err != nil {
+	ref := "HEAD"
+	if branch != "" {
+		ref = branch
+	}
+	if err := run(ctx, dir, "git", "fetch", "--depth", "1", "origin", ref); err != nil {
 		return err
 	}
 	return run(ctx, dir, "git", "reset", "--hard", "FETCH_HEAD")

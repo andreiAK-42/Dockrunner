@@ -17,11 +17,19 @@ import (
 type Handler struct {
 	service *Service
 	logger  *zap.Logger
+	isDev   bool
 }
 
-func NewHandler(service *Service, logger *zap.Logger) *Handler {
-	return &Handler{service: service, logger: logger}
+func NewHandler(service *Service, logger *zap.Logger, isDev bool) *Handler {
+	return &Handler{service: service, logger: logger, isDev: isDev}
 }
+
+// Default container resource limits (shared with containers module)
+const (
+	DefaultCPUCores  = 0.25
+	DefaultMemoryGB  = 0.5  // 512 MB
+	DefaultDiskGB    = 1.0
+)
 
 type CreateRequest struct {
 	AppName       string            `json:"app_name" binding:"required" example:"my-awesome-app"`
@@ -32,11 +40,25 @@ type CreateRequest struct {
 	Ports         []PortMapping     `json:"ports"`
 	Volumes       []VolumeSpec      `json:"volumes"`
 	Env           map[string]string `json:"env"`
-	CPUCores      float64           `json:"cpu_cores" binding:"required,gt=0" example:"1"`
-	MemoryGB      float64           `json:"memory_gb" binding:"required,gt=0" example:"1"`
-	DiskGB        float64           `json:"disk_gb" binding:"required,gt=0" example:"5"`
+	CPUCores      float64           `json:"cpu_cores" example:"0.25"`
+	MemoryGB      float64           `json:"memory_gb" example:"0.5"`
+	DiskGB        float64           `json:"disk_gb" example:"1"`
 	DurationHours float64           `json:"duration_hours" binding:"required,gt=0" example:"10"`
 	Services      []string          `json:"services" example:"front,back"`
+	BuildMode     string            `json:"build_mode" example:"compose"`
+	Branch        string            `json:"branch" example:"main"`
+}
+
+func applyDefaults(req *CreateRequest) {
+	if req.CPUCores <= 0 {
+		req.CPUCores = DefaultCPUCores
+	}
+	if req.MemoryGB <= 0 {
+		req.MemoryGB = DefaultMemoryGB
+	}
+	if req.DiskGB <= 0 {
+		req.DiskGB = DefaultDiskGB
+	}
 }
 
 type RejectRequest struct {
@@ -63,39 +85,46 @@ func (h *Handler) Create(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	applyDefaults(&req)
 
 	owner := c.GetString("login")
 	id := uuid.New()
 
 	request := &Request{
-		ID:             id,
-		OwnerLogin:     owner,
-		AppName:        req.AppName,
-		RepoURL:        req.RepoURL,
-		Image:          req.Image,
-		ContainerName:  req.ContainerName,
-		NodeID:         req.NodeID,
-		Ports:          req.Ports,
-		Volumes:        req.Volumes,
-		Env:            req.Env,
-		CPUCores:       req.CPUCores,
-		MemoryGB:       req.MemoryGB,
-		DiskGB:         req.DiskGB,
-		DurationHours:  req.DurationHours,
-		Services:       req.Services,
-		Price:          0,
-		Status:         "pending",
-		Comment:        "",
-		DecidedBy:      "",
-		DecidedAt:      nil,
-		DeploymentID:   "",
-		CreatedAt:      time.Time{},
-		UpdatedAt:      time.Time{},
+		ID:            id,
+		OwnerLogin:    owner,
+		AppName:       req.AppName,
+		RepoURL:       req.RepoURL,
+		Image:         req.Image,
+		ContainerName: req.ContainerName,
+		NodeID:        req.NodeID,
+		Ports:         req.Ports,
+		Volumes:       req.Volumes,
+		Env:           req.Env,
+		CPUCores:      req.CPUCores,
+		MemoryGB:      req.MemoryGB,
+		DiskGB:        req.DiskGB,
+		DurationHours: req.DurationHours,
+		Services:      req.Services,
+		BuildMode:     req.BuildMode,
+		Branch:        req.Branch,
+		Price:         0,
+		Status:        "pending",
+		Comment:       "",
+		DecidedBy:     "",
+		DecidedAt:     nil,
+		DeploymentID:  "",
+		CreatedAt:     time.Time{},
+		UpdatedAt:     time.Time{},
 	}
 
 	if err := h.service.Create(c.Request.Context(), request); err != nil {
 		h.logger.Error("create request failed", zap.Error(err))
-		response.Internal(c, "failed to create request")
+		if h.isDev {
+			response.Internal(c, err.Error())
+		} else {
+			response.Internal(c, "failed to create request")
+		}
 		return
 	}
 

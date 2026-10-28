@@ -1,8 +1,8 @@
 package containers
 
 import (
-	"github.com/gin-gonic/gin"
 	"dockrunner_backend/internal/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 func RegisterRoutes(rg *gin.RouterGroup, h *Handler, jwtSecret string) {
@@ -19,6 +19,8 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, jwtSecret string) {
 		containers.GET("/mine", h.Mine)
 		containers.GET("/:id/logs", h.ContainerLogs)
 		containers.GET("/:id/spec", h.ContainerSpec)
+		containers.POST("/:id/recreate", h.RecreateContainer)        // admin direct recreate
+		containers.POST("/:id/request-update", h.RequestUpdate)       // user request update (needs admin approval)
 		containers.GET("/:id/stats", h.ContainerStats)
 		containers.GET("/:id/build-log", h.BuildLog)
 		containers.POST("/:id/start", h.Start)

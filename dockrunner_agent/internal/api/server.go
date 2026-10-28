@@ -5,12 +5,14 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/coder/websocket"
 	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/docker/docker/api/types/network"
 
 	"dockrunner_agent/internal/buildlog"
 	"dockrunner_agent/internal/config"
@@ -47,6 +49,16 @@ type LogsResponse struct {
 type StatsResponse struct {
 	CPUPercent float64 `json:"cpu_percent" example:"12.5"`
 	MemMB      float64 `json:"mem_mb" example:"256.4"`
+}
+
+type ContainerSizeItem struct {
+	DeploymentID string `json:"deployment_id" example:"dep-1048"`
+	ContainerID  string `json:"container_id" example:"a1b2c3d4e5f6"`
+	SizeBytes    int64  `json:"size_bytes" example:"104857600"`
+}
+
+type ContainerSizesResponse struct {
+	Data []ContainerSizeItem `json:"data"`
 }
 
 type ErrorResponse struct {
@@ -177,85 +189,184 @@ type SpecPort struct {
 	Host      int `json:"host"`
 	Container int `json:"container"`
 }
-
 type SpecVolume struct {
 	Name          string `json:"name"`
 	HostPath      string `json:"host_path"`
 	ContainerPath string `json:"container_path"`
+	ReadOnly      bool   `json:"read_only"`
 }
-
 type SpecResponse struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Image   string            `json:"image"`
-	Status  string            `json:"status"`
-	Ports   []SpecPort        `json:"ports"`
-	Volumes []SpecVolume      `json:"volumes"`
-	Env     map[string]string `json:"env"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	Status        string            `json:"status"`
+	Ports         []SpecPort        `json:"ports"`
+	Volumes       []SpecVolume      `json:"volumes"`
+	Env           map[string]string `json:"env"`
+	Entrypoint    []string          `json:"entrypoint"`
+	Cmd           []string          `json:"cmd"`
+	RestartPolicy string            `json:"restart_policy"`
+	Network       string            `json:"network"`
+	WorkingDir    string            `json:"working_dir"`
+	User          string            `json:"user"`
 }
 
-// handleContainerSpec godoc
-// @Summary Полные параметры контейнера из SQLite
-// @Tags agent
-// @Produce json
-// @Param Authorization header string false "Bearer <agent_token> (или ?token= в query)"
-// @Param id path string true "ID деплоя"
-// @Success 200 {object} api.SpecResponse
-// @Failure 401 {object} api.ErrorResponse
-// @Failure 404 {object} api.ErrorResponse
-// @Router /containers/{id}/spec [get]
 func (s *Server) handleContainerSpec(w http.ResponseWriter, r *http.Request) {
 	dep, ok := s.findContainer(r)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "deployment not found"})
 		return
 	}
-	status := s.liveStatus(r.Context(), dep.Container, dep.Status)
+	live, err := s.dock.InspectSpec(r.Context(), dep.Container)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "docker inspect failed: " + err.Error()})
+		return
+	}
+	ports := make([]SpecPort, 0, len(live.Ports))
+	for _, p := range live.Ports {
+		ports = append(ports, SpecPort{Host: p.Host, Container: p.Container})
+	}
+	vols := make([]SpecVolume, 0, len(live.Volumes))
+	for _, v := range live.Volumes {
+		vols = append(vols, SpecVolume{Name: v.Name, HostPath: v.HostPath, ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly})
+	}
+	writeJSON(w, http.StatusOK, SpecResponse{ID: live.ID, Name: live.Name, Image: live.Image, Status: live.Status, Ports: ports, Volumes: vols, Env: live.Env, Entrypoint: live.Entrypoint, Cmd: live.Cmd, RestartPolicy: live.RestartPolicy, Network: live.Network, WorkingDir: live.WorkingDir, User: live.User})
+}
 
-	var storedPorts []struct {
-		Host          int `json:"host"`
-		Container     int `json:"container"`
-		HostPort      int `json:"host_port"`
-		ContainerPort int `json:"container_port"`
+type RecreateRequest struct {
+	Name          string            `json:"name"`
+	Image         string            `json:"image"`
+	Env           map[string]string `json:"env"`
+	Ports         []SpecPort        `json:"ports"`
+	Volumes       []SpecVolume      `json:"volumes"`
+	RestartPolicy string            `json:"restart_policy"`
+	Network       string            `json:"network"`
+	WorkingDir    string            `json:"working_dir"`
+}
+
+// allowedNetworks returns the list of networks the user is allowed to use.
+func (s *Server) allowedNetworks(ctx context.Context) (map[string]bool, error) {
+	list, err := s.dock.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return nil, err
 	}
-	_ = json.Unmarshal([]byte(dep.Ports), &storedPorts)
-	specPorts := make([]SpecPort, 0, len(storedPorts))
-	for _, p := range storedPorts {
-		host, containerPort := p.Host, p.Container
-		if host == 0 {
-			host = p.HostPort
+	allowed := map[string]bool{
+		"bridge": true,
+		"host":   true,
+		"none":   true,
+	}
+	for _, n := range list {
+		// Allow networks created by this agent (named like dockrunner-*)
+		if strings.HasPrefix(n.Name, "dockrunner-") {
+			allowed[n.Name] = true
 		}
-		if containerPort == 0 {
-			containerPort = p.ContainerPort
+	}
+	return allowed, nil
+}
+
+// validateWorkingDir checks if the working directory is within allowed paths.
+func validateWorkingDir(dir string) error {
+	if dir == "" {
+		return nil // empty means use image default
+	}
+	allowedPrefixes := []string{
+		"/workspace",
+		"/app",
+		"/home",
+		"/data",
+		"/var/lib",
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(dir, prefix) {
+			return nil
 		}
-		if host > 0 && containerPort > 0 {
-			specPorts = append(specPorts, SpecPort{Host: host, Container: containerPort})
+	}
+	return fmt.Errorf("working_dir must be under one of: %s", strings.Join(allowedPrefixes, ", "))
+}
+
+func (s *Server) handleContainerRecreate(w http.ResponseWriter, r *http.Request) {
+	dep, ok := s.findContainer(r)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "deployment not found"})
+		return
+	}
+	var req RecreateRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	if strings.TrimSpace(req.Image) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "image is required"})
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = dep.Name
+	}
+	// Validate network
+	if req.Network != "" {
+		allowed, err := s.allowedNetworks(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to list networks"})
+			return
+		}
+		if !allowed[req.Network] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "network not allowed"})
+			return
 		}
 	}
-	var volumes []struct {
-		Name      string `json:"name"`
-		HostPath  string `json:"host_path"`
-		Container string `json:"container_path"`
-		Path      string `json:"path"`
+	// Validate working_dir
+	if err := validateWorkingDir(req.WorkingDir); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
-	_ = json.Unmarshal([]byte(dep.Volumes), &volumes)
-	specVolumes := make([]SpecVolume, 0, len(volumes))
-	for _, v := range volumes {
-		containerPath := v.Container
-		if containerPath == "" {
-			containerPath = v.Path
+	ports := make([]docker.PortMapping, 0, len(req.Ports))
+	for _, p := range req.Ports {
+		if p.Host < 1 || p.Host > 65535 || p.Container < 1 || p.Container > 65535 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid port mapping"})
+			return
 		}
-		specVolumes = append(specVolumes, SpecVolume{Name: v.Name, HostPath: v.HostPath, ContainerPath: containerPath})
+		ports = append(ports, docker.PortMapping{Host: p.Host, Container: p.Container})
 	}
-	env := map[string]string{}
-	_ = json.Unmarshal([]byte(dep.Env), &env)
-	if env == nil {
-		env = map[string]string{}
+	vols := make([]docker.VolumeMount, 0, len(req.Volumes))
+	for _, v := range req.Volumes {
+		path := v.HostPath
+		if path == "" {
+			path = v.Name
+		}
+		if path == "" || v.ContainerPath == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "volume source and container path are required"})
+			return
+		}
+		vols = append(vols, docker.VolumeMount{Name: path, Path: v.ContainerPath})
 	}
-	writeJSON(w, http.StatusOK, SpecResponse{
-		ID: dep.ID, Name: dep.Name, Image: dep.Image, Status: status,
-		Ports: specPorts, Volumes: specVolumes, Env: env,
+	// Entrypoint, Cmd, User are intentionally ignored - use image defaults
+	id, err := s.dock.Recreate(r.Context(), dep.Container, docker.RecreateSpec{
+		Name:          req.Name,
+		Image:         req.Image,
+		Env:           req.Env,
+		Ports:         ports,
+		Volumes:       vols,
+		RestartPolicy: req.RestartPolicy,
+		Network:       req.Network,
+		WorkingDir:    req.WorkingDir,
 	})
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = store.UpdateDeploymentStatus(s.db, dep.ID, "running", id)
+	dep.Container = id
+	dep.Name = req.Name
+	dep.Image = req.Image
+	portsJSON, _ := json.Marshal(req.Ports)
+	volumesJSON, _ := json.Marshal(req.Volumes)
+	envJSON, _ := json.Marshal(req.Env)
+	dep.Ports = string(portsJSON)
+	dep.Volumes = string(volumesJSON)
+	dep.Env = string(envJSON)
+	dep.Status = "running"
+	_ = store.SaveDeployment(s.db, *dep)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "container_id": id, "status": "running"})
 }
 
 // handleContainerStats godoc
@@ -280,6 +391,47 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, StatsResponse{CPUPercent: stats.CPUPercent, MemMB: stats.MemMB})
+}
+
+// handleContainerSizes godoc
+// @Summary Размеры writable layer всех контейнеров
+// @Tags agent
+// @Produce json
+// @Param Authorization header string false "Bearer <agent_token> (или ?token= в query)"
+// @Success 200 {object} api.ContainerSizesResponse
+// @Failure 401 {object} api.ErrorResponse
+// @Router /containers/sizes [get]
+func (s *Server) handleContainerSizes(w http.ResponseWriter, r *http.Request) {
+	sizes, err := s.dock.ContainerSizes(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to get container sizes: " + err.Error()})
+		return
+	}
+	deployments, err := store.ListDeployments(s.db)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list deployments: " + err.Error()})
+		return
+	}
+	// Map container ID -> deployment ID
+	containerToDeployment := make(map[string]string)
+	for _, d := range deployments {
+		if d.Container != "" {
+			containerToDeployment[d.Container] = d.ID
+		}
+	}
+	out := make([]ContainerSizeItem, 0, len(sizes))
+	for containerID, sizeBytes := range sizes {
+		deploymentID := containerToDeployment[containerID]
+		if deploymentID == "" {
+			deploymentID = "unknown"
+		}
+		out = append(out, ContainerSizeItem{
+			DeploymentID: deploymentID,
+			ContainerID:  containerID,
+			SizeBytes:    sizeBytes,
+		})
+	}
+	writeJSON(w, http.StatusOK, ContainerSizesResponse{Data: out})
 }
 
 // handleContainerLogs godoc
@@ -426,8 +578,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /containers", s.checkToken(s.handleContainers))
+	mux.HandleFunc("GET /containers/sizes", s.checkToken(s.handleContainerSizes))
 	mux.HandleFunc("GET /containers/{id}/logs", s.checkToken(s.handleContainerLogs))
 	mux.HandleFunc("GET /containers/{id}/spec", s.checkToken(s.handleContainerSpec))
+	mux.HandleFunc("POST /containers/{id}/recreate", s.checkToken(s.handleContainerRecreate))
 	mux.HandleFunc("GET /containers/{id}/stats", s.checkToken(s.handleContainerStats))
 	mux.HandleFunc("GET /containers/{id}/logs/stream", s.checkToken(s.handleContainerLogStream))
 	mux.HandleFunc("GET /deployments/{id}/build-log", s.checkToken(s.handleBuildLog))

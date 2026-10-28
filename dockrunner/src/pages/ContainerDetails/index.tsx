@@ -2,11 +2,12 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Box, Button, Card, CardContent, Stack, Typography, Chip, Tabs, Tab, Divider, IconButton, TextField, MenuItem, Select, FormControl, InputLabel, Alert } from '@mui/material'
 import { ArrowLeft, Play, Square, RotateCcw, Terminal, Copy, Download, Trash2, HardDrive, Globe, Box as BoxIcon, ExternalLink } from 'lucide-react'
-import { fetchMine, fetchContainerSpec, fetchContainerLogs, startContainer, stopContainer, removeContainer, fetchBuildLog, type MineContainer, type ContainerSpec } from '../../api/containers'
+import { fetchMine, fetchContainerSpec, fetchContainerLogs, startContainer, stopContainer, removeContainer, fetchBuildLog, applyDockerCommand, requestContainerUpdate, type MineContainer, type ContainerSpec } from '../../api/containers'
 import { copyText } from '../../utils/clipboard'
 import { useEnvConfigs } from '../../hooks/useEnvConfigs'
 import { toDockerEnvArgs } from '../../types/envConfig'
 import type { EnvConfig } from '../../types/envConfig'
+import { IN_PROGRESS_STATUSES } from '../../utils/status'
 import styles from './ContainerDetails.module.scss'
 
 const DEFAULT_NEW_VOLUME_SIZE_GB = 5
@@ -19,23 +20,28 @@ function filterLogsBySearch(logs: string[], search: string): string[] {
   return logs.filter((line) => line.toLowerCase().includes(query))
 }
 
+function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value
+  return `'${value.replace(/'/g, `"'"'`)}'`
+}
+
 function buildInlineEnvArgs(env: Record<string, string>): string {
-  const args = Object.entries(env).map(([key, value]) => `--env ${key}="${value}"`)
-  return args.join(' ')
+  return Object.entries(env).map(([key, value]) => `--env ${shellArg(`${key}=${value}`)}`).join(' ')
 }
 
 function buildDockerCommand(spec: ContainerSpec, selectedEnv: EnvConfig | undefined): string {
-  const portArgs = spec.ports.map((port) => `-p ${port.host}:${port.container}`).join(' ')
-  const volumeArgs = spec.volumes.map((volume) => `-v ${volume.name || volume.host_path}:${volume.container_path}`).join(' ')
-
-  let envArgs = buildInlineEnvArgs(spec.env)
-  if (selectedEnv) {
-    envArgs = toDockerEnvArgs(selectedEnv)
-  }
-
-  const fullCommand = `docker run -d --name ${spec.name} ${portArgs} ${volumeArgs} ${envArgs} ${spec.image}`
-
-  return fullCommand.replace(/\s+/g, ' ').trim()
+  const args = ['docker run -d', `--name ${shellArg(spec.name)}`]
+  for (const port of spec.ports) args.push(`-p ${port.host}:${port.container}`)
+  for (const volume of spec.volumes) args.push(`-v ${shellArg(`${volume.name || volume.host_path}:${volume.container_path}`)}`)
+  args.push(selectedEnv ? selectedEnv.vars.map((item) => `--env ${shellArg(`${item.key}=${item.value}`)}`).join(' ') : buildInlineEnvArgs(spec.env))
+  if (spec.restart_policy) args.push(`--restart ${shellArg(spec.restart_policy)}`)
+  if (spec.network) args.push(`--network ${shellArg(spec.network)}`)
+  if (spec.entrypoint?.length) args.push(`--entrypoint ${shellArg(spec.entrypoint[0])}`)
+  if (spec.working_dir) args.push(`-w ${shellArg(spec.working_dir)}`)
+  if (spec.user) args.push(`-u ${shellArg(spec.user)}`)
+  args.push(shellArg(spec.image))
+  if (spec.cmd?.length || (spec.entrypoint && spec.entrypoint.length > 1)) args.push([...(spec.entrypoint?.slice(1) || []), ...(spec.cmd || [])].map(shellArg).join(' '))
+  return args.filter(Boolean).join(' ').trim()
 }
 
 function downloadTextFile(fileName: string, text: string) {
@@ -58,10 +64,11 @@ function getStatusColor(status: string): 'success' | 'error' | 'default' {
   return 'default'
 }
 
-function getAppUrl(nodeId: string, ports: { host: number; container: number }[]): string | null {
+function getAppUrl(nodeId: string, nodeIp: string | undefined, ports: { host: number; container: number }[]): string | null {
   if (ports.length === 0) return null
   const port = ports[0].host
-  return `http://${nodeId}:${port}`
+  const host = nodeIp || nodeId
+  return `http://${host}:${port}`
 }
 
 export default function ContainerDetails() {
@@ -74,6 +81,7 @@ export default function ContainerDetails() {
   const [follow, setFollow] = useState(true)
   const [search, setSearch] = useState('')
   const [envConfigId, setEnvConfigId] = useState('')
+  const [editedDockerCmd, setEditedDockerCmd] = useState<string | null>(null)
   const [volumes, setVolumes] = useState<Array<{ id: string; name: string; mountPath: string; sizeGB: number; readOnly?: boolean }>>([])
   const [volumesFor, setVolumesFor] = useState<string | undefined>(undefined)
   const [newVolName, setNewVolName] = useState('')
@@ -85,7 +93,9 @@ export default function ContainerDetails() {
   const [buildLog, setBuildLog] = useState<string | null>(null)
   const [buildLogError, setBuildLogError] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [applyingCommand, setApplyingCommand] = useState(false)
   const buildLogBoxRef = useRef<HTMLDivElement | null>(null)
   const cancelWaitRef = useRef(false)
 
@@ -149,7 +159,7 @@ export default function ContainerDetails() {
     }
   }, [wantLogs])
 
-  const isBuilding = record?.status === 'building'
+  const isBuilding = record ? IN_PROGRESS_STATUSES.has(record.status) : false
   const recordId = record?.id
 
   useEffect(() => {
@@ -329,8 +339,32 @@ export default function ContainerDetails() {
     return buildDockerCommand(spec, selectedEnv)
   }, [spec, selectedEnv])
 
+  const displayedDockerCmd = editedDockerCmd ?? dockerCmd
+
+  useEffect(() => {
+    setEditedDockerCmd(null)
+  }, [spec?.id, spec?.image, spec?.name])
+
+  const applyEditedCommand = async () => {
+    if (!realId || !displayedDockerCmd.trim()) return
+    const confirmed = window.confirm('Заявка на изменение параметров будет отправлена администратору на согласование. После одобрения контейнер будет пересоздан с новыми параметрами. Продолжить?')
+    if (!confirmed) return
+    setApplyingCommand(true)
+    setError(null)
+    setSuccessMessage(null)
+    try {
+      const res = await requestContainerUpdate(realId, displayedDockerCmd)
+      setEditedDockerCmd(null)
+      setSuccessMessage(`Заявка отправлена на согласование администратору (ID: ${res.data.request_id}). После одобрения контейнер будет пересоздан с новыми параметрами.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось отправить заявку на изменение')
+    } finally {
+      setApplyingCommand(false)
+    }
+  }
+
   const copyDocker = () => {
-    copyText(dockerCmd)
+    copyText(displayedDockerCmd)
   }
 
   const copyFilteredLogs = () => {
@@ -341,7 +375,7 @@ export default function ContainerDetails() {
   const followLabel = follow ? 'Слежение: вкл' : 'Слежение: выкл'
   const followColor = follow ? 'success' : 'default'
   const canAddVolume = !newVolName.trim() || !newVolPath.trim()
-  const appUrl = getAppUrl(record.node_id, spec?.ports || [])
+  const appUrl = getAppUrl(record.node_id, record.node_ip, spec?.ports || [])
 
   return (
     <Box className={styles.page}>
@@ -376,6 +410,7 @@ export default function ContainerDetails() {
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
+      {successMessage && <Alert severity="success">{successMessage}</Alert>}
 
       <Card className={styles.tabsCard}>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2 }}>
@@ -392,8 +427,13 @@ export default function ContainerDetails() {
           <Stack spacing={2}>
             <Card><CardContent>
               <Typography variant="h6" sx={{ fontWeight: 650, mb: 1 }}>Команда запуска</Typography>
-              <Box className={styles.dockerPreview}>{dockerCmd || 'Загрузка...'}</Box>
-              <Button size="small" sx={{ mt: 1 }} startIcon={<Copy size={14} />} onClick={copyDocker} disabled={!dockerCmd}>Копировать команду</Button>
+              <TextField fullWidth multiline minRows={3} maxRows={10} value={displayedDockerCmd} onChange={(e) => setEditedDockerCmd(e.target.value)} placeholder={spec ? 'Команда запуска не сформирована: проверьте образ и параметры контейнера' : 'Загрузка параметров контейнера…'} inputProps={{ 'aria-label': 'Команда запуска Docker' }} sx={{ '& textarea': { fontFamily: 'monospace', fontSize: 12 } }} />
+              <Alert severity="info" sx={{ mt: 1 }}>Команду можно редактировать и копировать. Нажатие кнопки «Запросить изменения» создаст заявку администратору на согласование новых параметров. После одобрения контейнер будет пересоздан с новыми настройками.</Alert>
+              <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                <Button size="small" startIcon={<Copy size={14} />} onClick={copyDocker} disabled={!displayedDockerCmd.trim()}>Копировать команду</Button>
+                <Button size="small" onClick={() => setEditedDockerCmd(null)} disabled={editedDockerCmd === null}>Сбросить изменения</Button>
+                <Button size="small" variant="contained" onClick={applyEditedCommand} disabled={applyingCommand || !displayedDockerCmd.trim()}>{applyingCommand ? 'Отправка заявки…' : 'Запросить изменения'}</Button>
+              </Stack>
             </CardContent></Card>
             <Card><CardContent>
               <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>Порты</Typography>
@@ -507,8 +547,12 @@ export default function ContainerDetails() {
                 )}
               </Box>
             )}
-            <Box className={styles.dockerPreview} sx={{ mt: 2 }}>{dockerCmd}</Box>
-            <Button size="small" startIcon={<Copy size={14} />} sx={{ mt: 1 }} onClick={copyDocker} disabled={!dockerCmd}>Копировать docker run</Button>
+            <TextField fullWidth multiline minRows={3} maxRows={10} label="Команда запуска (можно редактировать)" value={displayedDockerCmd} onChange={(e) => setEditedDockerCmd(e.target.value)} sx={{ mt: 2, '& textarea': { fontFamily: 'monospace', fontSize: 12 } }} />
+            <Alert severity="warning" sx={{ mt: 1 }}>Редактирование команды меняет только текст для копирования, а не настройки уже работающего контейнера. Для применения изменений нужно нажать «Запросить изменения» — это создаст заявку администратору на согласование. После одобрения контейнер будет пересоздан.</Alert>
+            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+              <Button size="small" startIcon={<Copy size={14} />} onClick={copyDocker} disabled={!displayedDockerCmd.trim()}>Копировать docker run</Button>
+              <Button size="small" onClick={() => setEditedDockerCmd(null)} disabled={editedDockerCmd === null}>Сбросить изменения</Button>
+            </Stack>
           </CardContent></Card>
         </Stack>
       )}

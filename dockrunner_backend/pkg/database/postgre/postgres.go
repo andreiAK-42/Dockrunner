@@ -176,10 +176,24 @@ func createContainersTable(ctx context.Context, pool *pgxpool.Pool, logger *zap.
 			status TEXT NOT NULL DEFAULT 'created',
 			node_id TEXT NOT NULL DEFAULT '',
 			ports TEXT NOT NULL DEFAULT '[]',
+			volumes TEXT NOT NULL DEFAULT '[]',
+			env TEXT NOT NULL DEFAULT '{}',
+			cpu_cores DOUBLE PRECISION NOT NULL DEFAULT 0.25,
+			memory_gb DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+			disk_gb DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+			restart_policy TEXT NOT NULL DEFAULT 'unless-stopped',
+			expires_at TIMESTAMPTZ NULL,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 	`)
 	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS ports TEXT NOT NULL DEFAULT '[]'`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS volumes TEXT NOT NULL DEFAULT '[]'`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS env TEXT NOT NULL DEFAULT '{}'`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS cpu_cores DOUBLE PRECISION NOT NULL DEFAULT 0.25`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS memory_gb DOUBLE PRECISION NOT NULL DEFAULT 0.5`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS disk_gb DOUBLE PRECISION NOT NULL DEFAULT 1.0`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS restart_policy TEXT NOT NULL DEFAULT 'unless-stopped'`)
+	execQuiet(ctx, pool, logger, "failed to migrate containers table", `ALTER TABLE containers ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL`)
 }
 
 func createStorageTable(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) {
@@ -242,16 +256,33 @@ func createLaunchRequestsTable(ctx context.Context, pool *pgxpool.Pool, logger *
 			memory_gb DOUBLE PRECISION NOT NULL DEFAULT 1,
 			disk_gb DOUBLE PRECISION NOT NULL DEFAULT 5,
 			duration_hours DOUBLE PRECISION NOT NULL DEFAULT 1,
+			branch TEXT NOT NULL DEFAULT '',
+			services TEXT NOT NULL DEFAULT '[]',
+			build_mode TEXT NOT NULL DEFAULT 'dockerfile',
 			price DOUBLE PRECISION NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'pending',
 			comment TEXT NOT NULL DEFAULT '',
 			decided_by TEXT NOT NULL DEFAULT '',
 			decided_at TIMESTAMPTZ NULL,
 			deployment_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL DEFAULT 'create',
+			existing_deployment_id TEXT NOT NULL DEFAULT '',
+			restart_policy TEXT NOT NULL DEFAULT 'unless-stopped',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
 	`)
+	// Backfill for existing databases (idempotent)
+	for _, col := range []string{
+		"ADD COLUMN IF NOT EXISTS branch TEXT NOT NULL DEFAULT ''",
+		"ADD COLUMN IF NOT EXISTS services TEXT NOT NULL DEFAULT '[]'",
+		"ADD COLUMN IF NOT EXISTS build_mode TEXT NOT NULL DEFAULT 'dockerfile'",
+		"ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'create'",
+		"ADD COLUMN IF NOT EXISTS existing_deployment_id TEXT NOT NULL DEFAULT ''",
+		"ADD COLUMN IF NOT EXISTS restart_policy TEXT NOT NULL DEFAULT 'unless-stopped'",
+	} {
+		execQuiet(ctx, pool, logger, "failed to migrate launch_requests table", `ALTER TABLE launch_requests `+col)
+	}
 }
 
 func createAgentPricingTable(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) {
@@ -305,7 +336,7 @@ func migrateAgentHardware(ctx context.Context, pool *pgxpool.Pool, logger *zap.L
 }
 
 func migrateLaunchRequestServices(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) {
-	execQuiet(ctx, pool, logger, "failed to migrate launch_requests services", `ALTER TABLE launch_requests ADD COLUMN IF NOT EXISTS services TEXT NOT NULL DEFAULT '[]'`)
+	// Columns are now added in createLaunchRequestsTable. Keep as no-op for existing migrations.
 }
 
 func createDatabaseUsersTable(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logger) {

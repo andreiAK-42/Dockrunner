@@ -13,7 +13,7 @@ data/
 workspace/
 *.db
 *.db-journal
-
+config.yaml
 # Logs
 *.log
 

@@ -236,7 +236,7 @@ func New(deps Dependencies) *gin.Engine {
 	if deploymentRequestsService == nil {
 		deploymentRequestsService = deploymentrequests.NewService(deploymentRequestsRepo, pricingRepo, containersService, balancesService, deps.Logger)
 	}
-	deploymentRequestsHandler := deploymentrequests.NewHandler(deploymentRequestsService, deps.Logger)
+	deploymentRequestsHandler := deploymentrequests.NewHandler(deploymentRequestsService, deps.Logger, deps.Config.IsDevelopment())
 	deploymentrequests.RegisterRoutes(v1, deploymentRequestsHandler, deps.Config.JWTSecret)
 
 	// --- Pricing ---

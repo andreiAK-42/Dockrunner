@@ -23,31 +23,41 @@ type VolumeSpec struct {
 }
 
 type Request struct {
-	ID             uuid.UUID  `json:"id"`
-	OwnerLogin     string     `json:"ownerLogin"`
-	AppName        string     `json:"appName"`
-	RepoURL        string     `json:"repoUrl"`
-	Image          string     `json:"image"`
-	ContainerName  string     `json:"containerName"`
-	NodeID         string     `json:"nodeId"`
-	Ports          []PortMapping `json:"ports"`
-	Volumes        []VolumeSpec  `json:"volumes"`
-	Env            map[string]string `json:"env"`
-	CPUCores       float64    `json:"cpuCores"`
-	MemoryGB       float64    `json:"memoryGB"`
-	DiskGB         float64    `json:"diskGB"`
-	DurationHours  float64    `json:"durationHours"`
+	ID                uuid.UUID         `json:"id"`
+	OwnerLogin        string            `json:"ownerLogin"`
+	AppName           string            `json:"appName"`
+	RepoURL           string            `json:"repoUrl"`
+	Image             string            `json:"image"`
+	ContainerName     string            `json:"containerName"`
+	NodeID            string            `json:"nodeId"`
+	Ports             []PortMapping     `json:"ports"`
+	Volumes           []VolumeSpec      `json:"volumes"`
+	Env               map[string]string `json:"env"`
+	CPUCores          float64           `json:"cpuCores"`
+	MemoryGB          float64           `json:"memoryGB"`
+	DiskGB            float64           `json:"diskGB"`
+	DurationHours     float64           `json:"durationHours"`
+	// Branch — git branch to deploy (required when repo_url is set)
+	Branch            string            `json:"branch"`
+	// Services — выбранные сервисы compose.
+	BuildMode         string            `json:"buildMode"`
 	// Services — сервисы compose (пусто = один контейнер).
 	// Цена заявки = цена одного контейнера × число сервисов.
-	Services       []string   `json:"services"`
-	Price          float64    `json:"price"`
-	Status         string     `json:"status"`
-	Comment        string     `json:"comment"`
-	DecidedBy      string     `json:"decidedBy"`
-	DecidedAt      *time.Time `json:"decidedAt"`
-	DeploymentID   string     `json:"deploymentId"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	Services          []string          `json:"services"`
+	Price             float64           `json:"price"`
+	Status            string            `json:"status"`
+	Comment           string            `json:"comment"`
+	DecidedBy         string            `json:"decidedBy"`
+	DecidedAt         *time.Time        `json:"decidedAt"`
+	DeploymentID      string            `json:"deploymentId"`
+	// Type — тип заявки: "create" (новый деплой) или "update" (изменение существующего)
+	Type              string            `json:"type"`
+	// ExistingDeploymentID — ID существующего деплоя для обновления
+	ExistingDeploymentID string         `json:"existingDeploymentId"`
+	// RestartPolicy — политика перезапуска контейнера
+	RestartPolicy     string            `json:"restartPolicy"`
+	CreatedAt         time.Time         `json:"createdAt"`
+	UpdatedAt         time.Time         `json:"updatedAt"`
 }
 
 type Repository struct {
@@ -59,16 +69,18 @@ func NewRepository(pool *pgxpool.Pool, logger *zap.Logger) *Repository {
 	return &Repository{pool: pool, logger: logger}
 }
 
-const requestColumns = `id, owner_login, app_name, repo_url, image, container_name, node_id, ports, volumes, env, cpu_cores, memory_gb, disk_gb, duration_hours, services, price, status, comment, decided_by, decided_at, deployment_id, created_at, updated_at`
+const requestColumns = `id, owner_login, app_name, repo_url, image, container_name, node_id, ports, volumes, env, cpu_cores, memory_gb, disk_gb, duration_hours, branch, services, build_mode, price, status, comment, decided_by, decided_at, deployment_id, type, existing_deployment_id, restart_policy, created_at, updated_at`
 
 func scanRequest(row pgx.Row) (*Request, error) {
 	var r Request
 	var portsJSON, volumesJSON, envJSON, servicesJSON string
+	var reqType, existingDeploymentID, restartPolicy string
 	err := row.Scan(
 		&r.ID, &r.OwnerLogin, &r.AppName, &r.RepoURL, &r.Image, &r.ContainerName, &r.NodeID,
 		&portsJSON, &volumesJSON, &envJSON,
-		&r.CPUCores, &r.MemoryGB, &r.DiskGB, &r.DurationHours, &servicesJSON, &r.Price,
+		&r.CPUCores, &r.MemoryGB, &r.DiskGB, &r.DurationHours, &r.Branch, &servicesJSON, &r.BuildMode, &r.Price,
 		&r.Status, &r.Comment, &r.DecidedBy, &r.DecidedAt, &r.DeploymentID,
+		&reqType, &existingDeploymentID, &restartPolicy,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
@@ -90,6 +102,9 @@ func scanRequest(row pgx.Row) (*Request, error) {
 	if r.Services == nil {
 		r.Services = []string{}
 	}
+	r.Type = reqType
+	r.ExistingDeploymentID = existingDeploymentID
+	r.RestartPolicy = restartPolicy
 	return &r, nil
 }
 
@@ -98,13 +113,23 @@ func (r *Repository) Create(ctx context.Context, req *Request) error {
 	volumesJSON, _ := json.Marshal(req.Volumes)
 	envJSON, _ := json.Marshal(req.Env)
 	servicesJSON, _ := json.Marshal(req.Services)
+	// Default type to "create" if not set
+	reqType := req.Type
+	if reqType == "" {
+		reqType = "create"
+	}
+	// Default restart_policy if not set
+	restartPolicy := req.RestartPolicy
+	if restartPolicy == "" {
+		restartPolicy = "unless-stopped"
+	}
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO launch_requests (id, owner_login, app_name, repo_url, image, container_name, node_id, ports, volumes, env, cpu_cores, memory_gb, disk_gb, duration_hours, services, price, status, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),now())`,
+		INSERT INTO launch_requests (id, owner_login, app_name, repo_url, image, container_name, node_id, ports, volumes, env, cpu_cores, memory_gb, disk_gb, duration_hours, branch, services, build_mode, price, status, type, existing_deployment_id, restart_policy, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now(),now())`,
 		req.ID, req.OwnerLogin, req.AppName, req.RepoURL, req.Image, req.ContainerName, req.NodeID,
 		string(portsJSON), string(volumesJSON), string(envJSON),
-		req.CPUCores, req.MemoryGB, req.DiskGB, req.DurationHours, string(servicesJSON), req.Price,
-		req.Status,
+		req.CPUCores, req.MemoryGB, req.DiskGB, req.DurationHours, req.Branch, string(servicesJSON), req.BuildMode, req.Price,
+		req.Status, reqType, req.ExistingDeploymentID, restartPolicy,
 	)
 	return err
 }

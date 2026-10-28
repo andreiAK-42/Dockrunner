@@ -1,10 +1,9 @@
-import { Box, Button, Card, CardContent, Chip, Stack, Typography, Divider, Tab, Tabs, FormControl, InputLabel, Select, MenuItem, Alert, Tooltip } from '@mui/material'
+import { Box, Button, Card, CardContent, Chip, Stack, Typography, Divider, Tab, Tabs, FormControl, InputLabel, Select, MenuItem, Alert, Tooltip, TextField } from '@mui/material'
 import { ArrowLeft, Play, Square, RefreshCw, Terminal, HardDrive as HD, Copy, Download, Box as BoxIcon, Server, Activity, Trash2, ExternalLink } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useEffect, useRef } from 'react'
-import { getAppById } from '../../config/applications'
 import { copyText } from '../../utils/clipboard'
-import { refreshContainerByApp, removeContainer, startContainer, stopContainer, fetchMine, fetchBuildLog, fetchContainerLogs, fetchContainerSpec } from '../../api/containers'
+import { refreshContainerByApp, removeContainer, startContainer, stopContainer, fetchMine, fetchBuildLog, fetchContainerLogs, fetchContainerSpec, applyDockerCommand } from '../../api/containers'
 import type { MineContainer, ContainerSpec } from '../../api/containers'
 import { ApiError, apiBase, getToken } from '../../api/client'
 import { timeAgo } from '../../utils/time'
@@ -13,7 +12,7 @@ import { toDockerEnvArgs } from '../../types/envConfig'
 import PortQuota from '../../components/PortQuota'
 import styles from './ApplicationDetails.module.scss'
 
-import { statusLabel } from '../../utils/status'
+import { statusLabel, IN_PROGRESS_STATUSES } from '../../utils/status'
 
 const POLL_INTERVAL_MS = 2000
 const DELETE_TIMEOUT_MS = 120000
@@ -23,30 +22,34 @@ const BUILD_LOG_POLL_MS = 2000
 const MESSAGE_HIDE_MS = 8000
 const CONFIRM_RESET_MS = 5000
 
-function specEnvArgs(spec: ContainerSpec | null) {
-  if (!spec) {
-    return ''
-  }
+function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value
+  return `'${value.replace(/'/g, `"'"'`)}'`
+}
 
-  const args = Object.entries(spec.env).map(([envKey, envValue]) => `--env ${envKey}="${envValue}"`)
-  return args.join(' ')
+function specEnvArgs(spec: ContainerSpec | null) {
+  if (!spec) return ''
+  return Object.entries(spec.env).map(([key, value]) => `--env ${shellArg(`${key}=${value}`)}`).join(' ')
 }
 
 function formatVolumeMount(volume: { name: string; host_path: string; container_path: string }) {
   const source = volume.name || volume.host_path
-  return `-v ${source}:${volume.container_path}`
+  return `-v ${shellArg(`${source}:${volume.container_path}`)}`
 }
 
 function buildDockerRun(spec: ContainerSpec | null, envArgs: string) {
-  if (!spec) {
-    return '—'
-  }
-
-  const portArgs = spec.ports.map((port) => `-p ${port.host}:${port.container}`).join(' ')
-  const volumeArgs = spec.volumes.map(formatVolumeMount).join(' ')
-  const fullCommand = `docker run -d --name ${spec.name} ${portArgs} ${volumeArgs} ${envArgs} ${spec.image}`
-
-  return fullCommand.replace(/\s+/g, ' ').trim()
+  if (!spec) return ''
+  const args = ['docker run -d', `--name ${shellArg(spec.name)}`]
+  for (const port of spec.ports) args.push(`-p ${port.host}:${port.container}`)
+  args.push(...spec.volumes.map(formatVolumeMount), envArgs)
+  if (spec.restart_policy) args.push(`--restart ${shellArg(spec.restart_policy)}`)
+  if (spec.network) args.push(`--network ${shellArg(spec.network)}`)
+  if (spec.entrypoint?.length) args.push(`--entrypoint ${shellArg(spec.entrypoint[0])}`)
+  if (spec.working_dir) args.push(`-w ${shellArg(spec.working_dir)}`)
+  if (spec.user) args.push(`-u ${shellArg(spec.user)}`)
+  args.push(shellArg(spec.image))
+  if (spec.cmd?.length || (spec.entrypoint && spec.entrypoint.length > 1)) args.push([...(spec.entrypoint?.slice(1) || []), ...(spec.cmd || [])].map(shellArg).join(' '))
+  return args.filter(Boolean).join(' ').trim()
 }
 
 function getErrorText(error: unknown, fallback: string): string {
@@ -60,9 +63,10 @@ export default function ApplicationDetails() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [tab, setTab] = useState(0)
-  const app = getAppById(id || '')
   const { configs } = useEnvConfigs()
   const [envConfigId, setEnvConfigId] = useState('')
+  const [editedDockerCmd, setEditedDockerCmd] = useState<string | null>(null)
+  const [applyingCommand, setApplyingCommand] = useState(false)
   const selectedEnv = configs.find((config) => config.id === envConfigId)
   const [updating, setUpdating] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -78,12 +82,15 @@ export default function ApplicationDetails() {
   const [spec, setSpec] = useState<ContainerSpec | null>(null)
   const cancelWaitRef = useRef(false)
 
-  const busy = updating || deleting || acting !== ''
+  const busy = updating || deleting || applyingCommand || acting !== ''
 
   let envArgs = specEnvArgs(spec)
   if (selectedEnv) {
-    envArgs = toDockerEnvArgs(selectedEnv)
+    envArgs = selectedEnv.vars.map((item) => `--env ${shellArg(`${item.key}=${item.value}`)}`).join(' ')
   }
+
+  const generatedDockerCmd = buildDockerRun(spec, envArgs)
+  const displayedDockerCmd = editedDockerCmd ?? generatedDockerCmd
 
   useEffect(() => {
     cancelWaitRef.current = false
@@ -103,7 +110,7 @@ export default function ApplicationDetails() {
 
   // Poll for record updates while building or during operations
   useEffect(() => {
-    if (!record || (record.status !== 'building' && !busy)) {
+    if (!record || (!IN_PROGRESS_STATUSES.has(record.status) && !busy)) {
       return
     }
     let alive = true
@@ -143,7 +150,7 @@ export default function ApplicationDetails() {
   const isStaleLogs = logsLoadedFor !== wantLogs
   const logsLoading = wantLogs !== '' && (logs === null || isStaleLogs)
 
-  const isBuilding = record?.status === 'building'
+  const isBuilding = record ? IN_PROGRESS_STATUSES.has(record.status) : false
   const recordId = record?.id
 
   useEffect(() => {
@@ -353,10 +360,10 @@ export default function ApplicationDetails() {
     const refreshedId = record.id
 
     try {
-      await refreshContainerByApp(app.name)
+      await refreshContainerByApp(record?.app_name || '')
       const refreshed = await waitForRecord(
         refreshedId,
-        (found) => found !== null && found.status !== 'building',
+        (found) => found !== null && !IN_PROGRESS_STATUSES.has(found.status),
         REFRESH_TIMEOUT_MS,
         'Превышено время ожидания обновления',
       )
@@ -378,6 +385,28 @@ export default function ApplicationDetails() {
     } finally {
       setUpdating(false)
       setTimeout(() => setUpdateMsg(null), MESSAGE_HIDE_MS)
+    }
+  }
+
+  const applyEditedCommand = async () => {
+    if (!record?.id || !displayedDockerCmd.trim()) return
+    const confirmed = window.confirm('Контейнер будет остановлен и пересоздан с новыми параметрами. Данные в подключённых томах сохранятся, но изменения внутри файловой системы контейнера могут быть потеряны. Продолжить?')
+    if (!confirmed) return
+    setApplyingCommand(true)
+    showMessage(false, '')
+    try {
+      await applyDockerCommand(record.id, displayedDockerCmd)
+      setEditedDockerCmd(null)
+      const refreshed = await fetchContainerSpec(record.id)
+      setSpec(refreshed.data)
+      showMessage(true, 'Параметры применены: контейнер пересоздан.')
+      const mine = await fetchMine()
+      const latest = mine.data.find((item) => item.id === record.id)
+      if (latest) setRecord(latest)
+    } catch (e) {
+      showMessage(false, e instanceof Error ? e.message : 'Не удалось применить параметры')
+    } finally {
+      setApplyingCommand(false)
     }
   }
 
@@ -441,7 +470,7 @@ export default function ApplicationDetails() {
 
       <Box className={styles.header}>
         <Box>
-          <Typography variant="h4" className={styles.header__title}>{app.name} <Chip size="small" color={record?.status === 'running' ? 'success' : record?.status === 'error' ? 'error' : 'default'} label={record ? statusLabel(record.status) : app.status} /></Typography>
+          <Typography variant="h4" className={styles.header__title}>{record?.app_name || id} <Chip size="small" color={record?.status === 'running' ? 'success' : record?.status === 'error' ? 'error' : 'default'} label={record ? statusLabel(record.status) : '—'} /></Typography>
           <Stack direction="row" spacing={1} alignItems="center" className={styles.header__meta}><Typography variant="body2" color="text.secondary">{spec?.image || record?.image || '—'} • {record?.node_id || '—'}</Typography></Stack>
         </Box>
         <Stack direction="row" spacing={1} className={styles.header__actions}><Button variant="outlined" startIcon={<RefreshCw size={16} />} disabled={!record || busy} onClick={() => handleOp('restart')}>{acting === 'restart' ? 'Перезапуск...' : 'Перезапустить'}</Button><Button variant="outlined" startIcon={<Download size={16} />} disabled={!record || busy} onClick={handleRefresh}>{updating ? 'Обновление...' : 'Обновить'}</Button><Button variant="contained" color="success" startIcon={<Play size={16} />} sx={{ color: '#fff' }} disabled={!record || busy} onClick={() => handleOp('start')}>{acting === 'start' ? 'Запуск...' : 'Старт'}</Button><Button variant="contained" color="error" startIcon={<Square size={16} />} sx={{ color: '#fff' }} disabled={!record || busy} onClick={() => handleOp('stop')}>{acting === 'stop' ? 'Остановка...' : 'Стоп'}</Button><Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} disabled={!record || busy} onClick={handleDelete}>{deleting ? 'Удаление...' : confirmDelete ? 'Точно удалить?' : 'Удалить'}</Button></Stack>
@@ -476,7 +505,7 @@ export default function ApplicationDetails() {
                     <Box key={`${p.host}-${p.container}`} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Chip size="small" label={`${p.host} → ${p.container}`} color="primary" variant="outlined" />
                       {p.host === spec.ports[0].host && (
-                        <a href={`http://${record?.node_id}:${p.host}`} target="_blank" rel="noopener noreferrer">
+                        <a href={`http://${record?.node_ip || record?.node_id}:${p.host}`} target="_blank" rel="noopener noreferrer">
                           <Button size="small" startIcon={<ExternalLink size={14} />} variant="outlined">Открыть</Button>
                         </a>
                       )}
@@ -519,13 +548,18 @@ export default function ApplicationDetails() {
             <Typography variant="h6" sx={{ fontWeight: 650, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}><HD size={18} /> Параметры запуска</Typography>
             <Stack spacing={1.5}>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
-                <Typography variant="body2" sx={{ fontWeight: 600 }}>{spec?.name || app.name}</Typography>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>{spec?.name || record?.app_name || id}</Typography>
                 <Chip label={spec?.image || record?.image || '—'} size="small" />
                 <Chip label={spec?.status || record?.status || '—'} size="small" variant="outlined" />
               </Box>
-              <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: '#0f172a', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                {buildDockerRun(spec, envArgs)}
-              </Box>
+              <TextField fullWidth multiline minRows={3} maxRows={10} label="Команда запуска (можно редактировать)" value={displayedDockerCmd} onChange={(e) => setEditedDockerCmd(e.target.value)} placeholder={spec ? 'Команда не сформирована: проверьте образ и имя контейнера' : 'Не удалось загрузить спецификацию контейнера'} sx={{ '& textarea': { fontFamily: 'monospace', fontSize: 12 } }} />
+              {!displayedDockerCmd && <Alert severity="warning">Команда не сформирована. Проверьте, что API агента возвращает образ, имя и параметры контейнера.</Alert>}
+              <Alert severity="info">Можно изменить строку и скопировать её. Это не изменяет уже созданный контейнер: чтобы применить параметры, его необходимо пересоздать.</Alert>
+              <Stack direction="row" spacing={1}>
+                <Button size="small" startIcon={<Copy size={14} />} onClick={() => copyText(displayedDockerCmd)} disabled={!displayedDockerCmd.trim()}>Копировать команду</Button>
+                <Button size="small" onClick={() => setEditedDockerCmd(null)} disabled={editedDockerCmd === null}>Сбросить изменения</Button>
+                  <Button size="small" variant="contained" onClick={applyEditedCommand} disabled={applyingCommand || !displayedDockerCmd.trim()}>{applyingCommand ? 'Пересоздание…' : 'Применить и пересоздать'}</Button>
+              </Stack>
               <Divider />
               <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Env-конфигурация</Typography>
               <FormControl fullWidth size="small">

@@ -36,6 +36,7 @@ export interface MineContainer {
   image: string
   status: string
   node_id: string
+  node_ip?: string
   ports: PortMapping[]
   cpu_cores?: number
   memory_gb?: number
@@ -69,13 +70,19 @@ export interface ContainerSpec {
   ports: { host: number; container: number }[]
   volumes: { name: string; host_path: string; container_path: string }[]
   env: Record<string, string>
+  entrypoint?: string[]
+  cmd?: string[]
+  restart_policy?: string
+  network?: string
+  working_dir?: string
+  user?: string
 }
 
 export function fetchContainerSpec(id: string) {
   return apiRequest<{ data: ContainerSpec }>(`/api/v1/containers/${id}/spec`)
 }
 
-export function checkRepository(payload: { app_name: string; repo_url: string; node_id: string }) {
+export function checkRepository(payload: { app_name: string; repo_url: string; node_id: string; branch: string }) {
   return apiRequest<{ data: CheckStatus }>('/api/v1/containers/check', {
     method: 'POST',
     body: payload,
@@ -95,6 +102,12 @@ export function runContainer(payload: {
   ports: PortSpec[]
   volumes: VolumeSpec[]
   env: Record<string, string>
+  entrypoint?: string[]
+  cmd?: string[]
+  restart_policy?: string
+  network?: string
+  working_dir?: string
+  user?: string
 }) {
   return apiRequest<{ data: { deployment_id: string } }>('/api/v1/containers/run', {
     method: 'POST',
@@ -129,4 +142,64 @@ export function stopContainer(id: string) {
 
 export function fetchBuildLog(id: string) {
   return apiRequest<{ data: string }>(`/api/v1/containers/${id}/build-log`)
+}
+
+function tokenizeDockerCommand(command: string): string[] {
+  const tokens: string[] = []
+  let token = '', quote = '', escaped = false, active = false
+  for (const ch of command.trim()) {
+    if (escaped) { token += ch; escaped = false; active = true; continue }
+    if (ch === '\\' && quote !== "'") { escaped = true; active = true; continue }
+    if (quote) { if (ch === quote) quote = ''; else token += ch; active = true; continue }
+    if (ch === '"' || ch === "'") { quote = ch; active = true; continue }
+    if (/\s/.test(ch)) { if (active) { tokens.push(token); token = ''; active = false }; continue }
+    token += ch; active = true
+  }
+  if (escaped || quote) throw new Error('Незакрытая кавычка или escape в команде')
+  if (active) tokens.push(token)
+  return tokens
+}
+
+export function parseDockerRunCommand(command: string) {
+  const args = tokenizeDockerCommand(command)
+  if (args[0] !== 'docker' || args[1] !== 'run') throw new Error('Ожидается команда docker run')
+  const result: any = { name: '', image: '', env: {}, ports: [], volumes: [], restart_policy: 'no', entrypoint: [], cmd: [], working_dir: '', user: '' }
+  let i = 2
+  while (i < args.length) {
+    const arg = args[i]
+    if (arg === '-d' || arg === '--detach') { i++; continue }
+    const takesValue = ['--name','--env','-e','--publish','-p','--volume','-v','--restart','--entrypoint','--network','-w','--workdir','-u','--user']
+    if (takesValue.includes(arg)) {
+      const value = args[i+1]; if (value === undefined) throw new Error(`Для ${arg} не задано значение`); i += 2
+      if (arg === '--name') result.name = value
+      else if (arg === '--env' || arg === '-e') { const at = value.indexOf('='); if (at <= 0) throw new Error(`Некорректная переменная окружения: ${value}`); result.env[value.slice(0,at)] = value.slice(at+1) }
+      else if (arg === '-p' || arg === '--publish') { const bits = value.split(':'); const host = Number(bits[bits.length-2]), container = Number(bits[bits.length-1]); if (!host || !container) throw new Error(`Некорректный порт: ${value}`); result.ports.push({host,container}) }
+      else if (arg === '-v' || arg === '--volume') { const bits = value.split(':'); if (bits.length < 2) throw new Error(`Некорректный том: ${value}`); result.volumes.push({name: bits.slice(0,-1).join(':'),host_path: bits.slice(0,-1).join(':'),container_path: bits[bits.length-1]}) }
+      else if (arg === '--restart') result.restart_policy = value
+      else if (arg === '--entrypoint') result.entrypoint = [value]
+      else if (arg === '--network') result.network = value
+      else if (arg === '-w' || arg === '--workdir') result.working_dir = value
+      else if (arg === '-u' || arg === '--user') result.user = value
+      continue
+    }
+    if (arg.startsWith('-')) throw new Error(`Параметр ${arg} пока нельзя применить через редактор. Поддерживаются --name, -e, -p, -v, --restart, --entrypoint, -w и -u.`)
+    result.image = arg
+    result.cmd = args.slice(i+1)
+    break
+  }
+  if (!result.image) throw new Error('В команде не указан образ контейнера')
+  if (!result.name) throw new Error('В команде не указано имя контейнера (--name)')
+  return result
+}
+
+export function applyDockerCommand(id: string, command: string) {
+  return apiRequest<{ ok: boolean; container_id: string; status: string }>(`/api/v1/containers/${id}/recreate`, {
+    method: 'POST', body: parseDockerRunCommand(command),
+  })
+}
+
+export function requestContainerUpdate(id: string, command: string) {
+  return apiRequest<{ message: string; request_id: string }>(`/api/v1/containers/${id}/request-update`, {
+    method: 'POST', body: parseDockerRunCommand(command),
+  })
 }

@@ -22,7 +22,6 @@ func NewService(repo *Repository, influx *influxdb.Client, logger *zap.Logger) *
 type HeartbeatInput struct {
 	AgentID       string       `json:"agent_id"`
 	Hostname      string       `json:"hostname"`
-	Name          string       `json:"name"`
 	IP            string       `json:"ip"`
 	City          string       `json:"city"`
 	Lat           float64      `json:"lat"`
@@ -45,21 +44,16 @@ type HeartbeatInput struct {
 	NetUpMbps     float64      `json:"net_up_mbps"`
 }
 
-// resolveAgentName выбирает имя воркера: name, иначе hostname, иначе agent_id.
+// resolveAgentName возвращает имя агента (теперь это просто AgentID).
 func resolveAgentName(in HeartbeatInput) string {
-	if in.Name != "" {
-		return in.Name
-	}
-	if in.Hostname != "" {
-		return in.Hostname
-	}
 	return in.AgentID
 }
 
 func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) error {
+	name := resolveAgentName(in)
 	if err := s.repo.UpsertHeartbeat(ctx, Agent{
 		ID:            in.AgentID,
-		Name:          resolveAgentName(in),
+		Name:          name,
 		IP:            in.IP,
 		City:          in.City,
 		Lat:           in.Lat,

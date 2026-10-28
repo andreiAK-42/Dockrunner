@@ -25,11 +25,13 @@ type Deployment struct {
 	Env       string
 	CPUCores  float64
 	MemoryGB  float64
+	DiskGB    float64 // лимит диска (overlay2.size)
 	// ParentID/ParentApp/Service — для сервис-контейнеров compose
 	// (одиночные деплои хранят пустые значения).
 	ParentID  string
 	ParentApp string
 	Service   string
+	Branch    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -73,6 +75,7 @@ CREATE TABLE IF NOT EXISTS deployments (
 	ports TEXT NOT NULL DEFAULT '[]',
 	volumes TEXT NOT NULL DEFAULT '[]',
 	env TEXT NOT NULL DEFAULT '{}',
+	branch TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL
 );
@@ -106,7 +109,7 @@ func ensureColumns(db *sql.DB) error {
 			}
 		}
 	}
-	for _, col := range []string{"cpu_cores", "memory_gb"} {
+	for _, col := range []string{"cpu_cores", "memory_gb", "disk_gb"} {
 		if !cols[col] {
 			if _, err := db.Exec(`ALTER TABLE deployments ADD COLUMN ` + col + ` REAL NOT NULL DEFAULT 0`); err != nil {
 				return err
@@ -114,6 +117,13 @@ func ensureColumns(db *sql.DB) error {
 		}
 	}
 	for _, col := range []string{"parent_id", "parent_app", "service"} {
+		if !cols[col] {
+			if _, err := db.Exec(`ALTER TABLE deployments ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
+				return err
+			}
+		}
+	}
+	for _, col := range []string{"branch"} {
 		if !cols[col] {
 			if _, err := db.Exec(`ALTER TABLE deployments ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil {
 				return err
@@ -129,18 +139,18 @@ func now() string {
 
 func SaveDeployment(db *sql.DB, d Deployment) error {
 	_, err := db.Exec(`INSERT INTO deployments
-		(id, app_id, app_name, owner, repo_url, name, image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(id, app_id, app_name, owner, repo_url, name, image, container, status, ports, volumes, env, cpu_cores, memory_gb, disk_gb, parent_id, parent_app, service, branch, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 		app_name=excluded.app_name, owner=excluded.owner, repo_url=excluded.repo_url,
 		name=excluded.name, image=excluded.image, container=excluded.container,
 		status=excluded.status, ports=excluded.ports, volumes=excluded.volumes,
-		env=excluded.env, cpu_cores=excluded.cpu_cores, memory_gb=excluded.memory_gb,
-		parent_id=excluded.parent_id, parent_app=excluded.parent_app, service=excluded.service,
+		env=excluded.env, cpu_cores=excluded.cpu_cores, memory_gb=excluded.memory_gb, disk_gb=excluded.disk_gb,
+		parent_id=excluded.parent_id, parent_app=excluded.parent_app, service=excluded.service, branch=excluded.branch,
 		updated_at=excluded.updated_at`,
 		d.ID, d.AppID, d.AppName, d.Owner, d.RepoURL, d.Name, d.Image, d.Container, d.Status,
-		d.Ports, d.Volumes, d.Env, d.CPUCores, d.MemoryGB,
-		d.ParentID, d.ParentApp, d.Service, now(), now())
+		d.Ports, d.Volumes, d.Env, d.CPUCores, d.MemoryGB, d.DiskGB,
+		d.ParentID, d.ParentApp, d.Service, d.Branch, now(), now())
 	return err
 }
 
@@ -149,7 +159,7 @@ func scanDeployment(row interface {
 }, d *Deployment, created, updated *string) error {
 	return row.Scan(&d.ID, &d.AppID, &d.AppName, &d.Owner, &d.RepoURL, &d.Name,
 		&d.Image, &d.Container, &d.Status, &d.Ports, &d.Volumes, &d.Env,
-		&d.CPUCores, &d.MemoryGB, &d.ParentID, &d.ParentApp, &d.Service, created, updated)
+		&d.CPUCores, &d.MemoryGB, &d.DiskGB, &d.ParentID, &d.ParentApp, &d.Service, &d.Branch, created, updated)
 }
 
 func parseDeploymentTime(d *Deployment, created, updated string) {
@@ -161,7 +171,7 @@ func GetDeployment(db *sql.DB, id string) (*Deployment, error) {
 	var d Deployment
 	var created, updated string
 	err := scanDeployment(db.QueryRow(`SELECT id, app_id, app_name, owner, repo_url, name,
-		image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, created_at, updated_at FROM deployments WHERE id = ?`, id), &d, &created, &updated)
+		image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, branch, created_at, updated_at FROM deployments WHERE id = ?`, id), &d, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoDeployment
 	}
@@ -174,7 +184,7 @@ func GetDeployment(db *sql.DB, id string) (*Deployment, error) {
 
 func ListDeployments(db *sql.DB) ([]Deployment, error) {
 	rows, err := db.Query(`SELECT id, app_id, app_name, owner, repo_url, name,
-		image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, created_at, updated_at FROM deployments ORDER BY updated_at DESC`)
+		image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, branch, created_at, updated_at FROM deployments ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}

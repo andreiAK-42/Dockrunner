@@ -34,6 +34,7 @@ type CheckRequest struct {
 	AppName string `json:"app_name" binding:"required" example:"my-awesome-app"`
 	RepoURL string `json:"repo_url" binding:"required,url" example:"https://github.com/org/repo"`
 	NodeID  string `json:"node_id" binding:"required" example:"worker-01"`
+	Branch  string `json:"branch" binding:"required" example:"main"`
 }
 
 func parseTail(raw string) int {
@@ -101,7 +102,62 @@ func (h *Handler) ContainerSpec(c *gin.Context) {
 		response.NotFound(c, "spec unavailable")
 		return
 	}
-	c.Data(http.StatusOK, "application/json", spec)
+	c.Data(http.StatusOK, "application/json", append(append([]byte(`{"data":`), spec...), []byte(`}`)...))
+}
+
+// RecreateContainer applies edited Docker launch parameters by recreating the container.
+// This is an admin endpoint - users should use RequestUpdate instead.
+func (h *Handler) RecreateContainer(c *gin.Context) {
+	var req map[string]any
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	body, err := h.service.RecreateContainer(c.Request.Context(), c.GetString("login"), c.Param("id"), req)
+	if err != nil {
+		h.logger.Warn("container recreate failed", zap.Error(err))
+		if errors.Is(err, oplock.ErrBusy) {
+			response.Conflict(c, err.Error())
+			return
+		}
+		if errors.Is(err, ErrNotFound) {
+			response.NotFound(c, "container not found")
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	c.Data(http.StatusOK, "application/json", body)
+}
+
+// RequestUpdate creates a deployment request for updating container parameters.
+// Users call this instead of directly recreating - the request needs admin approval.
+func (h *Handler) RequestUpdate(c *gin.Context) {
+	var req map[string]any
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	requestID, err := h.service.RequestContainerUpdate(c.Request.Context(), c.GetString("login"), c.Param("id"), req)
+	if err != nil {
+		h.logger.Warn("container update request failed", zap.Error(err))
+		if errors.Is(err, oplock.ErrBusy) {
+			response.Conflict(c, err.Error())
+			return
+		}
+		if errors.Is(err, ErrNotFound) {
+			response.NotFound(c, "container not found")
+			return
+		}
+		if errors.Is(err, ErrNoQueue) {
+			response.Internal(c, "queue unavailable")
+			return
+		}
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.OK(c, gin.H{"message": "update request created, waiting for admin approval", "request_id": requestID})
 }
 
 // ContainerStats godoc
@@ -129,7 +185,7 @@ func (h *Handler) ContainerStats(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param request body containers.CheckRequest true "Приложение, репозиторий, узел"
+// @Param request body containers.CheckRequest true "Приложение, репозиторий, узел, ветка"
 // @Success 202 {object} response.Success{data=containers.Check}
 // @Failure 400 {object} response.Error
 // @Router /api/v1/containers/check [post]
@@ -139,7 +195,7 @@ func (h *Handler) StartCheck(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	check, err := h.service.StartCheck(c.Request.Context(), c.GetString("login"), req.AppName, req.RepoURL, req.NodeID)
+	check, err := h.service.StartCheck(c.Request.Context(), c.GetString("login"), req.AppName, req.RepoURL, req.NodeID, req.Branch)
 	if err != nil {
 		h.logger.Error("check failed", zap.Error(err))
 		if errors.Is(err, oplock.ErrBusy) {
@@ -174,6 +230,16 @@ func (h *Handler) GetCheck(c *gin.Context) {
 	response.OK(c, check)
 }
 
+// Default container resource limits
+const (
+	DefaultCPUCores  = 0.25
+	DefaultMemoryGB  = 0.5  // 512 MB
+	DefaultDiskGB    = 1.0
+	MinCPUCores      = 0.01 // prevent zero/negative
+	MinMemoryGB      = 0.01 // 10 MB minimum
+	MinDiskGB        = 0.1  // 100 MB minimum
+)
+
 type RunRequest struct {
 	AppName       string            `json:"app_name" binding:"required" example:"my-awesome-app"`
 	RepoURL       string            `json:"repo_url" example:"https://github.com/org/repo"`
@@ -183,11 +249,36 @@ type RunRequest struct {
 	Ports         []PortSpec        `json:"ports"`
 	Volumes       []VolumeSpec      `json:"volumes"`
 	Env           map[string]string `json:"env"`
-	CPUCores      float64           `json:"cpu_cores" example:"1"`
-	MemoryGB      float64           `json:"memory_gb" example:"1"`
-	DiskGB        float64           `json:"disk_gb" example:"5"`
+	CPUCores      float64           `json:"cpu_cores" example:"0.25"`
+	MemoryGB      float64           `json:"memory_gb" example:"0.5"`
+	DiskGB        float64           `json:"disk_gb" example:"1"`
 	DurationHours float64           `json:"duration_hours" example:"10"`
 	Services      []string          `json:"services" example:"front,back"`
+	BuildMode     string            `json:"build_mode" example:"compose"`
+}
+
+func applyDefaultsAndValidate(req *RunRequest) error {
+	// Apply defaults
+	if req.CPUCores <= 0 {
+		req.CPUCores = DefaultCPUCores
+	}
+	if req.MemoryGB <= 0 {
+		req.MemoryGB = DefaultMemoryGB
+	}
+	if req.DiskGB <= 0 {
+		req.DiskGB = DefaultDiskGB
+	}
+	// Validate minimums
+	if req.CPUCores < MinCPUCores {
+		return errors.New("cpu_cores must be at least 0.01")
+	}
+	if req.MemoryGB < MinMemoryGB {
+		return errors.New("memory_gb must be at least 0.01 (10 MB)")
+	}
+	if req.DiskGB < MinDiskGB {
+		return errors.New("disk_gb must be at least 0.1 (100 MB)")
+	}
+	return nil
 }
 
 // Run godoc
@@ -206,6 +297,10 @@ func (h *Handler) Run(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
+	if err := applyDefaultsAndValidate(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 	id, err := h.service.Run(c.Request.Context(), c.GetString("login"), RunInput{
 		AppName:       req.AppName,
 		RepoURL:       req.RepoURL,
@@ -220,6 +315,7 @@ func (h *Handler) Run(c *gin.Context) {
 		DiskGB:        req.DiskGB,
 		DurationHours: req.DurationHours,
 		Services:      req.Services,
+		BuildMode:     req.BuildMode,
 	})
 	if err != nil {
 		h.logger.Warn("run failed", zap.Error(err))

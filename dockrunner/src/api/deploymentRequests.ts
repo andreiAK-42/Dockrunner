@@ -16,6 +16,8 @@ export interface DeploymentRequest {
   diskGB: number
   durationHours: number
   services: string[]
+  buildMode?: 'dockerfile' | 'compose'
+  branch?: string
   price: number
   status: string
   comment: string
@@ -40,6 +42,8 @@ export function createDeploymentRequest(payload: {
   disk_gb: number
   duration_hours: number
   services: string[]
+  build_mode: 'dockerfile' | 'compose'
+  branch?: string
 }) {
   return apiRequest<{ data: DeploymentRequest }>('/api/v1/deployment-requests', {
     method: 'POST',
