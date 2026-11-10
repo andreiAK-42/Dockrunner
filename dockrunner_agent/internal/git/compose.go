@@ -11,22 +11,6 @@ import (
 
 var errNoServices = errors.New("no services in compose file")
 
-type ComposeService struct {
-	Name       string
-	Image      string
-	Dockerfile string
-	ContextDir string
-}
-
-type composeServiceRaw struct {
-	Image string `yaml:"image"`
-	Build any    `yaml:"build"`
-}
-
-type composeFileRaw struct {
-	Services map[string]composeServiceRaw `yaml:"services"`
-}
-
 // ParseComposeServices разбирает ВСЕ сервисы compose-файла (отсортированы по имени).
 func ParseComposeServices(dir, file string) ([]ComposeService, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, file))
@@ -62,6 +46,8 @@ func ParseComposeServices(dir, file string) ([]ComposeService, error) {
 		default:
 			cs.Dockerfile = ""
 		}
+		// Parse ports and expose
+		cs.Ports = parseComposeServicePorts(svc.Ports, svc.Expose)
 		out = append(out, cs)
 	}
 	return out, nil

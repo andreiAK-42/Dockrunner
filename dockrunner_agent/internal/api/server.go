@@ -537,9 +537,31 @@ func (s *Server) handleContainerLogStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	serveStream(w, r, s.streamer.History(dep.Container, 200), func() (<-chan string, func()) {
+	var history []string
+	if limit := queryHistory(r); limit > 0 {
+		history = s.streamer.History(dep.Container, limit)
+	}
+
+	serveStream(w, r, history, func() (<-chan string, func()) {
 		return s.streamer.Subscribe(dep.Container)
 	})
+}
+
+// queryHistory reads ?history=. The backend asks for history=0 because it
+// already loads the full tail over HTTP and only needs live lines here.
+func queryHistory(r *http.Request) int {
+	raw := r.URL.Query().Get("history")
+	if raw == "" {
+		return 200
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 0 {
+		return 200
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
 }
 
 // serveStream отдаёт историю построчно, затем живые сообщения, пока клиент на связи.

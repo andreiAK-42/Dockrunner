@@ -1,87 +1,39 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
-import { fetchMe, login as apiLogin, logout as apiLogout } from '../api/auth'
-import { clearTokens, getToken } from '../api/client'
+import { useCallback } from 'react'
+import { useAppDispatch, useAppSelector } from '../store/hooks'
+import { loginUser, logoutUser, type AuthUser } from '../store/slices/authSlice'
 
-interface User {
-  login: string
-  name: string
-  role: string
-  isSuperuser: boolean
-}
+export type { AuthUser as User }
 
-interface AuthContextValue {
+interface AuthValue {
   isAuthenticated: boolean
-  user: User | null
+  user: AuthUser | null
   login: (login: string, password: string) => Promise<void>
   logout: () => void
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null)
-const STORAGE_KEY = 'dockyard-auth-v1'
+/**
+ * Auth state lives in Redux. The hook keeps the previous `useAuth()` API so
+ * components do not need to know about the store shape.
+ */
+export function useAuth(): AuthValue {
+  const dispatch = useAppDispatch()
+  const user = useAppSelector((state) => state.auth.user)
 
-function toUser(userLogin: string, role: string, isSuperuser?: boolean): User {
-  const displayName = userLogin.charAt(0).toUpperCase() + userLogin.slice(1)
-  return { login: userLogin, role, name: displayName, isSuperuser: !!isSuperuser }
-}
+  const login = useCallback(
+    async (loginText: string, password: string) => {
+      await dispatch(loginUser({ login: loginText, password })).unwrap()
+    },
+    [dispatch],
+  )
 
-function loadStoredUser(): User | null {
-  try {
-    const storedJson = localStorage.getItem(STORAGE_KEY)
-    if (storedJson) {
-      return JSON.parse(storedJson)
-    }
-  } catch {
-    // нет сохранённой сессии
-  }
-  return null
-}
+  const logout = useCallback(() => {
+    void dispatch(logoutUser())
+  }, [dispatch])
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(loadStoredUser)
-
-  useEffect(() => {
-    if (!user && getToken()) {
-      fetchMe()
-        .then((res) => setUser(toUser(res.data.login, res.data.role, res.data.is_superuser)))
-        .catch(() => clearTokens())
-    }
-  }, [user])
-
-  useEffect(() => {
-    try {
-      if (user) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(user))
-      } else {
-        localStorage.removeItem(STORAGE_KEY)
-      }
-    } catch {
-      // localStorage недоступен
-    }
-  }, [user])
-
-  const login = async (userLogin: string, password: string) => {
-    const res = await apiLogin(userLogin, password)
-    setUser(toUser(res.user.login, res.user.role, res.user.is_superuser))
-  }
-
-  const logout = () => {
-    apiLogout().finally(() => setUser(null))
-  }
-
-  const value: AuthContextValue = {
+  return {
     isAuthenticated: user !== null,
     user,
     login,
     logout,
   }
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext)
-  if (!ctx) {
-    throw new Error('useAuth must be within AuthProvider')
-  }
-  return ctx
 }

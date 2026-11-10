@@ -25,6 +25,11 @@ export function getToken() {
   }
 }
 
+function emitAuthEvent(name: string) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new Event(name))
+}
+
 export function setTokens(access: string, refresh: string) {
   try {
     localStorage.setItem(TOKEN_KEY, access)
@@ -32,6 +37,7 @@ export function setTokens(access: string, refresh: string) {
   } catch {
     // localStorage недоступен — токены останутся только в памяти сессии
   }
+  emitAuthEvent('dockrunner:auth-updated')
 }
 
 export function getRefreshToken() {
@@ -49,6 +55,7 @@ export function clearTokens() {
   } catch {
     // localStorage недоступен — нечего очищать
   }
+  emitAuthEvent('dockrunner:auth-cleared')
 }
 
 export class ApiError extends Error {

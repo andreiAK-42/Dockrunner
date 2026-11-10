@@ -135,11 +135,10 @@ export default function EnvConfigs() {
 
       <Card>
         <CardContent>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Использовано {configs.length} / 10</Typography>
-            <Chip label={`Осталось ${remaining}`} color={remaining === 0 ? 'error' : 'success'} size="small" />
           </Stack>
-          <Box sx={{ mt: 1.5, height: 8, borderRadius: 999, bgcolor: 'divider', overflow: 'hidden' }}>
+          <Box sx={{ mt: 2, height: 8, borderRadius: 999, bgcolor: 'divider', overflow: 'hidden' }}>
             <Box sx={{ width: `${configs.length * 10}%`, height: '100%', bgcolor: configs.length >= 10 ? 'error.main' : 'primary.main', transition: 'width .3s' }} />
           </Box>
           {!canCreate && <Stack direction="row" gap={1} alignItems="center" sx={{ mt: 1.5, color: 'warning.main' }}><AlertCircle size={16} /><Typography variant="caption">Лимит исчерпан — удалите старый конфиг чтобы создать новый.</Typography></Stack>}

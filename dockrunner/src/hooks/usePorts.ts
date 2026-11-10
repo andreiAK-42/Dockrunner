@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
-import { fetchMine } from '../api/containers'
+import { useEffect } from 'react'
 import type { MineContainer } from '../api/containers'
-import { fetchQuotas } from '../api/quotas'
+import { useAppDispatch, useAppSelector } from '../store/hooks'
+import { fetchMineContainers } from '../store/slices/containersSlice'
+import { fetchQuotasThunk } from '../store/slices/quotasSlice'
 
 export interface PortInfo {
   port: number
@@ -34,24 +35,22 @@ function collectUsedPorts(containers: MineContainer[]): PortInfo[] {
 }
 
 export function usePorts() {
-  const [used, setUsed] = useState<PortInfo[]>([])
-  const [limit, setLimit] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const dispatch = useAppDispatch()
+  const containers = useAppSelector((state) => state.containers.mine)
+  const containersStatus = useAppSelector((state) => state.containers.mineStatus)
+  const quotas = useAppSelector((state) => state.quotas)
 
   useEffect(() => {
-    Promise.allSettled([fetchMine(), fetchQuotas()]).then(([mineResult, quotasResult]) => {
-      if (mineResult.status === 'fulfilled') {
-        const usedPorts = collectUsedPorts(mineResult.value.data)
-        setUsed(usedPorts)
-      }
+    if (containersStatus === 'idle') {
+      void dispatch(fetchMineContainers())
+    }
+    if (quotas.status === 'idle') {
+      void dispatch(fetchQuotasThunk())
+    }
+  }, [containersStatus, quotas.status, dispatch])
 
-      if (quotasResult.status === 'fulfilled') {
-        setLimit(quotasResult.value.data.ports_limit)
-      }
-
-      setLoading(false)
-    })
-  }, [])
+  const used = collectUsedPorts(containers)
+  const limit = quotas.data?.ports_limit ?? 0
 
   const usedCount = used.length
   const freeCount = Math.max(0, limit - usedCount)
@@ -62,7 +61,11 @@ export function usePorts() {
     usedCount,
     freeCount,
     limit,
-    loading,
+    loading:
+      containersStatus === 'idle' ||
+      containersStatus === 'loading' ||
+      quotas.status === 'idle' ||
+      quotas.status === 'loading',
     isFull,
   }
 }

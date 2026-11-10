@@ -16,6 +16,7 @@ const configFile = "config.yaml"
 
 // Config — YAML-конфиг агента. Поля City/Lat/Lng/IP в файл не пишутся:
 // город и координаты определяются при старте, IP — из geo или локального интерфейса.
+// AgentIP можно указать в конфиге для принудительного задания IP агента.
 type Config struct {
 	AgentName           string        `yaml:"AgentName"`
 	AgentDescription    string        `yaml:"AgentDescription"`
@@ -30,6 +31,7 @@ type Config struct {
 	Port                string        `yaml:"Port"`
 	Heartbeat           time.Duration `yaml:"-"`
 	HeartbeatRaw        yaml.Node     `yaml:"Heartbeat"`
+	AgentIP             string        `yaml:"AgentIP"`
 
 	City string  `yaml:"-"`
 	Lat  float64 `yaml:"-"`
@@ -127,4 +129,5 @@ Workspace: ./workspace
 HostWorkspace: ""
 Port: "8090"
 Heartbeat: 15
+# AgentIP: "192.168.1.100"  # Укажите IP агента вручную, если нужно переопределить автоопределение
 `

@@ -73,22 +73,34 @@ type Task struct {
 }
 
 type Event struct {
-	Type               string   `json:"type"`
-	AgentID            string   `json:"agent_id"`
-	AppID              string   `json:"app_id"`
-	AppName            string   `json:"app_name"`
-	OwnerLogin         string   `json:"owner_login"`
-	Image              string   `json:"image"`
-	DeploymentID       string   `json:"deployment_id"`
-	DetectedDockerfile bool     `json:"detected_dockerfile"`
-	ComposeFile        string   `json:"compose_file"`
-	Services           []string `json:"services,omitempty"`
+	Type               string            `json:"type"`
+	AgentID            string            `json:"agent_id"`
+	AppID              string            `json:"app_id"`
+	AppName            string            `json:"app_name"`
+	OwnerLogin         string            `json:"owner_login"`
+	Image              string            `json:"image"`
+	DeploymentID       string            `json:"deployment_id"`
+	DetectedDockerfile bool              `json:"detected_dockerfile"`
+	ComposeFile        string            `json:"compose_file"`
+	Services           []string          `json:"services,omitempty"`
+	Branches           []string          `json:"branches,omitempty"`
+	// DetectedEnvVars — переменные окружения из .env/.env.example
+	DetectedEnvVars map[string]string   `json:"detected_env_vars,omitempty"`
+	// DetectedPorts — порты из Dockerfile EXPOSE и docker-compose ports/expose
+	DetectedPorts   []DetectedPort      `json:"detected_ports,omitempty"`
 	// ParentApp — головное приложение для событий сервис-контейнеров
 	// (нужно центру, чтобы снять oplock родительской операции).
 	ParentApp string     `json:"parent_app,omitempty"`
 	Ports     []PortTask `json:"ports"`
 	Message   string     `json:"msg"`
 	Time      string     `json:"time"`
+}
+
+type DetectedPort struct {
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol"`
+	Source        string `json:"source"` // "dockerfile" or "compose"
+	Service       string `json:"service,omitempty"` // service name for compose
 }
 
 type Handler struct {
@@ -377,12 +389,48 @@ func (h *Handler) prepare(ctx context.Context, task Task) error {
 		fail("Dockerfile или docker-compose не найден в корне проекта (там: " + seen + ")")
 		return nil
 	}
+
+	// Detect environment variables from .env and .env.example
+	detectedEnvVars, _ := git.DetectEnvFiles(dir)
+
+	// Detect ports from Dockerfile EXPOSE
+	var detectedPorts []DetectedPort
+	if dockerfile != "" {
+		exposedPorts, _ := git.ParseDockerfileExposedPorts(dir, dockerfile)
+		for _, p := range exposedPorts {
+			detectedPorts = append(detectedPorts, DetectedPort{
+				ContainerPort: p.ContainerPort,
+				Protocol:      p.Protocol,
+				Source:        "dockerfile",
+			})
+		}
+	}
+
+	// Detect ports from docker-compose
 	var services []string
 	if compose != "" {
-		// Имена сервисов нужны центру для цены (N контейнеров) и заявке.
-		// Ошибка парсинга здесь не фатальна — упадёт на deploy с понятным текстом.
-		services, _ = git.ParseComposeNames(dir, compose)
+		composeServices, err := git.ParseComposeServices(dir, compose)
+		if err == nil {
+			for _, svc := range composeServices {
+				services = append(services, svc.Name)
+				for _, p := range svc.Ports {
+					detectedPorts = append(detectedPorts, DetectedPort{
+						ContainerPort: p.ContainerPort,
+						Protocol:      p.Protocol,
+						Source:        "compose",
+						Service:       svc.Name,
+					})
+				}
+			}
+		} else {
+			// Fallback to just names if parsing fails
+			services, _ = git.ParseComposeNames(dir, compose)
+		}
 	}
+
+	// Detect branches (local after clone)
+	branches, _ := git.ListLocalBranches(dir)
+
 	h.publishEvent(ctx, Event{
 		Type:               "prepare.completed",
 		AppID:              task.AppID,
@@ -391,6 +439,9 @@ func (h *Handler) prepare(ctx context.Context, task Task) error {
 		DetectedDockerfile: dockerfile != "",
 		ComposeFile:        compose,
 		Services:           services,
+		Branches:           branches,
+		DetectedEnvVars:    detectedEnvVars,
+		DetectedPorts:      detectedPorts,
 		Message:            "проект готов к сборке",
 	})
 	return nil

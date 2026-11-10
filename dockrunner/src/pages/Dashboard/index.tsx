@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react'
-import { Box, Grid, Card, CardContent, Typography, Stack, Alert, Chip, FormControl, InputLabel, Select, MenuItem, Button, CircularProgress } from '@mui/material'
-import { RefreshCw } from 'lucide-react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Box, Grid, Card, CardContent, Typography, Stack, Alert, Chip, FormControl, InputLabel, Select, MenuItem, Button, CircularProgress, Snackbar } from '@mui/material'
+import { RefreshCw, AlertCircle } from 'lucide-react'
 import { LineChart, Gauge, gaugeClasses } from '@mui/x-charts'
 import { Box as BoxIcon, Server, Wallet, HardDrive } from 'lucide-react'
 import ServerMap from '../../components/ServerMap'
 import { useAgents } from '../../hooks/useAgents'
-import { fetchMine, fetchContainerStats } from '../../api/containers'
-import type { MineContainer, ContainerStats } from '../../api/containers'
+import { fetchMine, fetchContainerStats, fetchContainerSpec, refreshContainerByApp } from '../../api/containers'
+import type { ContainerStats } from '../../api/containers'
 import { fetchResources } from '../../api/overview'
 import type { ResourceDay } from '../../api/overview'
 import { fetchStorageUsage } from '../../api/storage'
@@ -15,6 +15,10 @@ import { fetchMyBalance } from '../../api/balances'
 import { TARIFF } from '../../config/tariff'
 import { timeAgo } from '../../utils/time'
 import { statusLabel, statusColor } from '../../utils/status'
+import { useRealtimeStatus } from '../../hooks/useRealtime'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { containerStatusPatched, fetchMineContainers } from '../../store/slices/containersSlice'
+import type { MineContainer } from '../../api/containers'
 import UserQuotas from '../../components/UserQuotas'
 import PortQuota from '../../components/PortQuota'
 import styles from './Dashboard.module.scss'
@@ -37,25 +41,92 @@ const RESOURCES_DAYS = 14
 const ACTIVITY_LIMIT = 8
 
 export default function Dashboard() {
+  const dispatch = useAppDispatch()
   const { nodes, loading: nodesLoading, error: nodesError } = useAgents()
-  const [containers, setContainers] = useState<MineContainer[]>([])
+  const containers = useAppSelector((state) => state.containers.mine)
   const [resources, setResources] = useState<ResourceDay[]>([])
   const [storage, setStorage] = useState<StorageUsage | null>(null)
   const [balance, setBalance] = useState<number | null>(null)
-  const [error, setError] = useState('')
+  const error = useAppSelector((state) => state.containers.mineError)
   const [statsContainerId, setStatsContainerId] = useState('')
   const [stats, setStats] = useState<ContainerStats | null>(null)
   const [statsLoading, setStatsLoading] = useState(false)
   const [statsError, setStatsError] = useState('')
+  const [, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null)
+  const connected = useRealtimeStatus()
 
-  useEffect(() => {
-    Promise.allSettled([fetchMine(), fetchResources(RESOURCES_DAYS), fetchStorageUsage(), fetchMyBalance()]).then(([mineResult, resourcesResult, usageResult, balanceResult]) => {
-      if (mineResult.status === 'fulfilled') {
-        setContainers(mineResult.value.data)
-      } else {
-        setError('Не удалось загрузить контейнеры')
+  // Verify actual container status for all containers
+  const verifyContainerStatuses = useCallback(async () => {
+    setSyncing(true)
+    setSyncError(null)
+    setSyncSuccess(null)
+
+    try {
+      // Fetch fresh container list from backend to avoid stale closure
+      const mineRes = await fetchMine()
+      const currentContainers = mineRes.data
+
+      if (currentContainers.length === 0) {
+        setSyncSuccess('Статусы актуальны, изменений нет')
+        setSyncing(false)
+        return
       }
 
+      // Fetch all container specs in parallel
+      const specResults = await Promise.allSettled(
+        currentContainers.map(container => fetchContainerSpec(container.id))
+      )
+
+      let correctedCount = 0
+      let refreshedCount = 0
+
+      for (let i = 0; i < currentContainers.length; i++) {
+        const container = currentContainers[i]
+        const specResult = specResults[i]
+
+        if (specResult.status === 'fulfilled') {
+          const actualStatus = specResult.value.data.status
+          if (actualStatus !== container.status) {
+            dispatch(containerStatusPatched({ id: container.id, status: actualStatus }))
+            correctedCount++
+          }
+        } else {
+          // Handle 404 - backend DB out of sync with Docker on agent
+          // Try to trigger a refresh from the agent
+          const err = specResult.reason
+          if (err?.status === 404 && container.app_name) {
+            try {
+              await refreshContainerByApp(container.app_name)
+              refreshedCount++
+            } catch (refreshErr) {
+              console.warn(`Failed to refresh container ${container.id}:`, refreshErr)
+            }
+          } else {
+            console.warn(`Failed to verify status for container ${container.id}:`, err)
+          }
+        }
+      }
+
+      const messages: string[] = []
+      if (correctedCount > 0) messages.push(`исправлено ${correctedCount}`)
+      if (refreshedCount > 0) messages.push(`запрошено обновление: ${refreshedCount}`)
+      if (messages.length > 0) {
+        setSyncSuccess(`Синхронизация: ${messages.join(', ')}`)
+      } else {
+        setSyncSuccess('Статусы актуальны, изменений нет')
+      }
+    } catch {
+      setSyncError('Не удалось синхронизировать статусы')
+    } finally {
+      setSyncing(false)
+    }
+  }, [dispatch])
+
+  useEffect(() => {
+    void dispatch(fetchMineContainers())
+    Promise.allSettled([fetchResources(RESOURCES_DAYS), fetchStorageUsage(), fetchMyBalance()]).then(([resourcesResult, usageResult, balanceResult]) => {
       if (resourcesResult.status === 'fulfilled') {
         setResources(resourcesResult.value.data)
       }
@@ -68,7 +139,28 @@ export default function Dashboard() {
         setBalance(balanceResult.value.data)
       }
     })
-  }, [])
+  }, [dispatch])
+
+  // Auto-verify status on initial load for all containers (only once)
+  const verifiedRef = useRef(false)
+  useEffect(() => {
+    if (!verifiedRef.current && containers.length > 0) {
+      verifiedRef.current = true
+      void verifyContainerStatuses()
+    }
+  }, [containers.length, verifyContainerStatuses])
+
+  // Fallback status sync: only while the WebSocket is down.
+  useEffect(() => {
+    if (connected) return
+    const interval = setInterval(() => {
+      if (containers.length > 0) {
+        verifyContainerStatuses()
+      }
+    }, 30000)
+
+    return () => clearInterval(interval)
+  }, [containers, connected, verifyContainerStatuses])
 
   const onlineNodes = nodes.filter((node) => node.status === 'online')
   const usedGB = storage?.total_gb || 0
@@ -111,6 +203,18 @@ export default function Dashboard() {
   return (
     <div className={styles.page}>
       {error && <Alert severity="error">{error}</Alert>}
+      <Typography variant="h5" sx={{ fontWeight: 600, mb: 3 }}>Дашборд</Typography>
+      <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => setSyncError(null)}>
+        <Alert severity="error" onClose={() => setSyncError(null)} sx={{ flexGrow: 1 }}>
+          <AlertCircle size={18} sx={{ mr: 1 }} />
+          {syncError}
+        </Alert>
+      </Snackbar>
+      <Snackbar open={!!syncSuccess} autoHideDuration={6000} onClose={() => setSyncSuccess(null)}>
+        <Alert severity="success" onClose={() => setSyncSuccess(null)} sx={{ flexGrow: 1 }}>
+          {syncSuccess}
+        </Alert>
+      </Snackbar>
       <Grid container spacing={3}>
         {cards.map((card) => (
           <Grid key={card.title} size={{ xs: 12, sm: 6, md: 3 }}>
@@ -260,7 +364,7 @@ export default function Dashboard() {
       </Grid>
 
       <Card>
-        <CardContent>
+        <CardContent sx={{ overflow: 'visible' }}>
           <Typography variant="h6" sx={{ mb: 2, fontWeight: 600 }}>Последняя активность</Typography>
           {activity.length === 0 ? (
             <Typography color="text.secondary">Пока пусто — активность появится после первых деплоев.</Typography>

@@ -1,225 +1,52 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { Box, Typography, Card, CardContent, Grid, TextField, MenuItem, Button, Stack, Divider, FormControl, InputLabel, Select, Radio, RadioGroup, FormControlLabel, Checkbox, Alert, IconButton, CircularProgress, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material'
+import { Box, Typography, Card, CardContent, Grid, TextField, MenuItem, Button, Stack, Divider, FormControl, InputLabel, Select, Radio, RadioGroup, FormControlLabel, Checkbox, Alert, IconButton, CircularProgress, Snackbar, Dialog, DialogTitle, DialogContent, DialogActions, FormHelperText } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Save, GitBranch, CheckCircle2, Plus, Trash2, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Save, GitBranch, Plus, Trash2, RefreshCw } from 'lucide-react'
 import ServerMap from '../../components/ServerMap'
-import { percent } from '../../types/workerNode'
 import type { WorkerNode } from '../../types/workerNode'
 import { useAgents } from '../../hooks/useAgents'
 import { usePorts } from '../../hooks/usePorts'
 import type { PortInfo } from '../../hooks/usePorts'
 import { useEnvConfigs } from '../../hooks/useEnvConfigs'
 import { checkRepository, fetchCheck } from '../../api/containers'
-import type { CheckStatus } from '../../api/containers'
+import type { CheckStatus, DetectedPort } from '../../api/containers'
 import { ApiError } from '../../api/client'
 import { fetchQuotas } from '../../api/quotas'
 import { createDeploymentRequest } from '../../api/deploymentRequests'
 import { fetchPricing } from '../../api/admin'
 import type { PricingRate } from '../../api/admin'
+import {
+  randomFreePorts,
+  parsePort,
+  nextFreeHostPort,
+  buildMappedPorts,
+  type PortRow,
+  type MappedPort,
+  DEFAULT_PORTS_MIN,
+  DEFAULT_PORTS_MAX,
+  SUGGEST_PORTS_COUNT,
+} from '../../utils/ports'
+import {
+  delay,
+  isCheckFinished,
+  waitForCheck,
+  CHECK_POLL_INTERVAL_MS,
+  CHECK_TIMEOUT_MS,
+  CANCELLED_MESSAGE,
+} from '../../utils/check'
+import {
+  getWorkerName,
+  findLeastLoadedNode,
+} from '../../utils/nodes'
+import {
+  portSourceLabel,
+  buildMappedVolumes,
+  buildEnvMap,
+  type VolumeRow,
+  type EnvRow,
+  type MappedVolume,
+} from '../../utils/docker'
 import styles from './CreateApplication.module.scss'
-
-interface PortRow {
-  host: string
-  container: string
-}
-
-interface VolumeRow {
-  hostPath: string
-  containerPath: string
-}
-
-interface EnvRow {
-  key: string
-  value: string
-}
-
-interface MappedPort {
-  host_port: number
-  container_port: number
-}
-
-interface MappedVolume {
-  name?: string
-  host_path?: string
-  container_path: string
-}
-
-const CHECK_POLL_INTERVAL_MS = 2000
-const CHECK_TIMEOUT_MS = 90000
-const DEFAULT_PORTS_MIN = 3000
-const DEFAULT_PORTS_MAX = 4000
-const MAX_PORT_NUMBER = 65535
-const CANCELLED_MESSAGE = 'cancelled'
-const SUGGEST_PORTS_COUNT = 10
-
-function mulberry32(seed: number) {
-  let state = seed >>> 0
-  return () => {
-    state |= 0
-    state = (state + 0x6d2b79f5) | 0
-    let t = Math.imul(state ^ (state >>> 15), 1 | state)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-function randomFreePorts(count: number, min: number, max: number, taken: Set<number>, seed: number): number[] {
-  const picked: number[] = []
-  const range = max - min + 1
-  if (range <= 0 || count <= 0) {
-    return picked
-  }
-  const rand = mulberry32(seed)
-  let guard = 0
-  while (picked.length < count && guard < count * 50 + 200) {
-    guard += 1
-    const port = min + Math.floor(rand() * range)
-    if (taken.has(port) || picked.includes(port)) {
-      continue
-    }
-    picked.push(port)
-  }
-  return picked.sort((a, b) => a - b)
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms))
-}
-
-function isCheckFinished(status: string) {
-  return status === 'ready' || status === 'failed'
-}
-
-async function waitForCheck(id: string, isCancelled: () => boolean): Promise<CheckStatus> {
-  const started = Date.now()
-
-  for (;;) {
-    if (isCancelled()) {
-      throw new Error(CANCELLED_MESSAGE)
-    }
-
-    await delay(CHECK_POLL_INTERVAL_MS)
-
-    if (isCancelled()) {
-      throw new Error(CANCELLED_MESSAGE)
-    }
-
-    const res = await fetchCheck(id)
-    if (isCheckFinished(res.data.status)) {
-      return res.data
-    }
-
-    const waitedTooLong = Date.now() - started > CHECK_TIMEOUT_MS
-    if (waitedTooLong) {
-      throw new Error('Превышено время ожидания проверки')
-    }
-  }
-}
-
-function getWorkerName(nodes: { id: string; name: string }[], id: string) {
-  const foundNode = nodes.find((node) => node.id === id)
-  if (foundNode) {
-    return foundNode.name
-  }
-  return id
-}
-
-function parsePort(value: string): number | null {
-  const parsed = Number(value)
-  const isValidPort = Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_PORT_NUMBER
-  if (!isValidPort) {
-    return null
-  }
-  return parsed
-}
-
-function getNodeLoad(node: WorkerNode): number {
-  const cpuLoad = percent(node.cpu.used, node.cpu.total)
-  const memoryLoad = percent(node.memory.used, node.memory.total)
-  return cpuLoad + memoryLoad
-}
-
-function findLeastLoadedNode(onlineNodes: WorkerNode[]): WorkerNode | undefined {
-  const sortedByLoad = [...onlineNodes].sort((first, second) => getNodeLoad(first) - getNodeLoad(second))
-  return sortedByLoad[0]
-}
-
-function buildMappedPorts(portRows: PortRow[], portsRange: { min: number; max: number }, busyPorts: PortInfo[], nodeId: string): MappedPort[] {
-  const mappedPorts: MappedPort[] = []
-
-  for (const row of portRows) {
-    const bothEmpty = !row.host.trim() && !row.container.trim()
-    if (bothEmpty) {
-      continue
-    }
-
-    const host = parsePort(row.host)
-    const container = parsePort(row.container)
-    if (host === null || container === null) {
-      throw new Error('Порты должны быть числами от 1 до 65535')
-    }
-
-    const outOfRange = host < portsRange.min || host > portsRange.max
-    if (outOfRange) {
-      throw new Error(`Хост-порт должен быть в диапазоне ${portsRange.min}–${portsRange.max}`)
-    }
-
-    const busyPort = busyPorts.find((busy) => busy.nodeId === nodeId && busy.port === host)
-    if (busyPort) {
-      throw new Error(`Порт ${host} уже занят приложением «${busyPort.appName}» на выбранном узле`)
-    }
-
-    mappedPorts.push({ host_port: host, container_port: container })
-  }
-
-  return mappedPorts
-}
-
-function buildMappedVolumes(volumeRows: VolumeRow[]): MappedVolume[] {
-  const mappedVolumes: MappedVolume[] = []
-
-  for (const row of volumeRows) {
-    const containerPath = row.containerPath.trim()
-    const hostPath = row.hostPath.trim()
-
-    const bothEmpty = !containerPath && !hostPath
-    if (bothEmpty) {
-      continue
-    }
-
-    if (!containerPath) {
-      throw new Error('У каждого тома должен быть путь в контейнере')
-    }
-
-    const volume: MappedVolume = { container_path: containerPath }
-
-    if (hostPath) {
-      const isPath = hostPath.includes('/') || hostPath.includes('\\') || hostPath.startsWith('.')
-      if (isPath) {
-        volume.host_path = hostPath
-      } else {
-        volume.name = hostPath
-      }
-    }
-
-    mappedVolumes.push(volume)
-  }
-
-  return mappedVolumes
-}
-
-function buildEnvMap(envRows: EnvRow[]): Record<string, string> {
-  const env: Record<string, string> = {}
-
-  for (const row of envRows) {
-    const key = row.key.trim()
-    if (key) {
-      env[key] = row.value
-    }
-  }
-
-  return env
-}
 
 export default function CreateApplication() {
   const navigate = useNavigate()
@@ -235,6 +62,11 @@ export default function CreateApplication() {
   const [envConfigId, setEnvConfigId] = useState<string>('')
   const { configs } = useEnvConfigs()
   const [check, setCheck] = useState<CheckStatus | null>(null)
+  const [autoFillCheck, setAutoFillCheck] = useState<CheckStatus | null>(null)
+  const [showAutoFillDialog, setShowAutoFillDialog] = useState(false)
+  const [autoFillBranch, setAutoFillBranch] = useState('')
+  const [autoFillEnvKeys, setAutoFillEnvKeys] = useState<string[]>([])
+  const [autoFillPortIndices, setAutoFillPortIndices] = useState<number[]>([])
   const [buildMode, setBuildMode] = useState<'dockerfile' | 'compose'>('dockerfile')
   const [selectedServices, setSelectedServices] = useState<string[]>([])
   const [checking, setChecking] = useState(false)
@@ -415,7 +247,7 @@ export default function CreateApplication() {
 
     try {
       const checkRes = await checkRepository({ app_name: appNameFilled, repo_url: repoUrlFilled, node_id: effectiveNodeId, branch: branchFilled })
-      const finishedCheck = await waitForCheck(checkRes.data.id, () => cancelRef.current)
+      const finishedCheck = await waitForCheck(checkRes.data.id, () => cancelRef.current, fetchCheck)
       setCheck(finishedCheck)
       if (finishedCheck.status === 'ready') {
         const found = [
@@ -423,6 +255,27 @@ export default function CreateApplication() {
           finishedCheck.compose_file || '',
         ].filter(Boolean).join(' и ')
         setToast({ severity: 'success', message: found ? `Репозиторий проверен — найден ${found}` : 'Репозиторий проверен' })
+
+        // Auto-fill detected environment variables from .env/.env.example
+        if (finishedCheck.detected_env_vars && Object.keys(finishedCheck.detected_env_vars).length > 0) {
+          const detectedEntries = Object.entries(finishedCheck.detected_env_vars)
+          const keptRows = envRows.filter((row) => {
+            const key = row.key.trim()
+            return key !== '' && !appliedKeys.includes(key)
+          })
+          const keptKeys = new Set(keptRows.map((row) => row.key.trim()))
+          const addedRows = detectedEntries
+            .filter(([key]) => !keptKeys.has(key))
+            .map(([key, value]) => ({ key, value }))
+
+          setAppliedKeys(detectedEntries.map(([key]) => key))
+          setEnvRows([...keptRows, ...addedRows])
+          if (keptRows.length === 0 && addedRows.length > 0) {
+            // Clear the empty row if we had only empty rows before
+            setEnvRows(addedRows)
+          }
+        }
+
         // Show modal for build mode selection
         const defaultMode = finishedCheck.compose_file ? 'compose' : 'dockerfile'
         setPendingBuildMode(defaultMode)
@@ -456,6 +309,165 @@ export default function CreateApplication() {
 
   const handleCancelCheck = () => {
     cancelRef.current = true
+  }
+
+  const handleAutoFill = async () => {
+    const repoUrlFilled = repoUrl.trim()
+    if (!repoUrlFilled) {
+      setFormError('Введите ссылку на репозиторий')
+      return
+    }
+    if (!effectiveNodeId) {
+      setFormError('Выберите узел для развёртывания')
+      return
+    }
+
+    setFormError('')
+    setChecking(true)
+    setElapsed(0)
+    cancelRef.current = false
+
+    const timer = setInterval(() => setElapsed((seconds) => seconds + 1), 1000)
+
+    try {
+      const checkRes = await checkRepository({ app_name: appName.trim() || 'temp', repo_url: repoUrlFilled, node_id: effectiveNodeId, branch: branch.trim() || 'main' })
+      const finishedCheck = await waitForCheck(checkRes.data.id, () => cancelRef.current, fetchCheck)
+      setAutoFillCheck(finishedCheck)
+      setCheck(finishedCheck) // Also set main check so button becomes "Отправить на рассмотрение"
+
+      // Initialize auto-fill selections
+      if (finishedCheck.branches && finishedCheck.branches.length > 0) {
+        setAutoFillBranch(finishedCheck.branches[0])
+      }
+      if (finishedCheck.detected_env_vars) {
+        setAutoFillEnvKeys(Object.keys(finishedCheck.detected_env_vars))
+      }
+      if (finishedCheck.detected_ports) {
+        setAutoFillPortIndices(finishedCheck.detected_ports.map((_, i) => i))
+      }
+      // Initialize build mode selection
+      if (finishedCheck.compose_file) {
+        setPendingBuildMode('compose')
+        setPendingServices(finishedCheck.services || [])
+      } else {
+        setPendingBuildMode('dockerfile')
+        setPendingServices([])
+      }
+      setShowAutoFillDialog(true)
+    } catch (checkError) {
+      const isCancelled = checkError instanceof Error && checkError.message === CANCELLED_MESSAGE
+      if (isCancelled) {
+        return
+      }
+      if (checkError instanceof ApiError && checkError.status === 404) {
+        setToast({ severity: 'error', message: 'Проверка потеряна — сервер перезапускался? Запустите снова' })
+        return
+      }
+      if (checkError instanceof Error) {
+        setToast({ severity: 'error', message: checkError.message })
+      } else {
+        setToast({ severity: 'error', message: 'Автозаполнение не удалось' })
+      }
+    } finally {
+      clearInterval(timer)
+      setChecking(false)
+    }
+  }
+
+  const handleAutoFillApply = () => {
+    if (!autoFillCheck) return
+
+    // Apply branch
+    if (autoFillBranch) {
+      setBranch(autoFillBranch)
+    }
+
+    // Apply env vars
+    if (autoFillCheck.detected_env_vars && autoFillEnvKeys.length > 0) {
+      const keptRows = envRows.filter((row) => {
+        const key = row.key.trim()
+        return key !== '' && !appliedKeys.includes(key)
+      })
+      const keptKeys = new Set(keptRows.map((row) => row.key.trim()))
+      const addedRows = autoFillEnvKeys
+        .filter((key) => !keptKeys.has(key) && autoFillCheck.detected_env_vars![key])
+        .map((key) => ({ key, value: autoFillCheck.detected_env_vars![key] }))
+
+      setAppliedKeys([...appliedKeys, ...autoFillEnvKeys])
+      setEnvRows([...keptRows, ...addedRows])
+    }
+
+    // Apply ports: replace empty/default rows, keep already filled mappings
+    if (autoFillCheck.detected_ports && autoFillPortIndices.length > 0) {
+      // Filter selected ports by the chosen build mode
+      const selectedPorts = autoFillPortIndices
+        .map((index) => autoFillCheck.detected_ports![index])
+        .filter((port): port is DetectedPort => Boolean(port))
+        .filter((port) => {
+          if (pendingBuildMode === 'dockerfile') {
+            return port.source === 'dockerfile'
+          }
+          if (pendingBuildMode === 'compose') {
+            return port.source === 'compose'
+          }
+          return true
+        })
+
+      const usedHosts = new Set(
+        busyPorts.filter((busy) => busy.nodeId === effectiveNodeId).map((busy) => busy.port),
+      )
+      const keptRows = ports.filter((row) => {
+        const host = parsePort(row.host)
+        const container = parsePort(row.container)
+        if (host === null || container === null) {
+          return false
+        }
+        usedHosts.add(host)
+        return true
+      })
+      const usedContainers = new Set(
+        keptRows.map((row) => parsePort(row.container)).filter((port): port is number => port !== null),
+      )
+      const addedRows: PortRow[] = []
+      for (const detected of selectedPorts) {
+        if (usedContainers.has(detected.container_port)) {
+          continue
+        }
+        const hostPort = nextFreeHostPort(portsRange.min, portsRange.max, usedHosts)
+        if (hostPort <= 0) {
+          break
+        }
+        usedHosts.add(hostPort)
+        usedContainers.add(detected.container_port)
+        addedRows.push({ host: String(hostPort), container: String(detected.container_port) })
+      }
+      const nextPorts = [...keptRows, ...addedRows]
+      setPorts(nextPorts.length > 0 ? nextPorts : [{ host: '', container: '80' }])
+    }
+
+    // Apply build mode and selected services
+    if (autoFillCheck.compose_file) {
+      setBuildMode(pendingBuildMode)
+      setSelectedServices(pendingServices)
+    } else {
+      setBuildMode('dockerfile')
+      setSelectedServices([])
+    }
+
+    setShowAutoFillDialog(false)
+    setAutoFillCheck(null)
+    setAutoFillBranch('')
+    setAutoFillEnvKeys([])
+    setAutoFillPortIndices([])
+    setToast({ severity: 'success', message: 'Данные автозаполнения применены' })
+  }
+
+  const handleAutoFillCancel = () => {
+    setShowAutoFillDialog(false)
+    setAutoFillCheck(null)
+    setAutoFillBranch('')
+    setAutoFillEnvKeys([])
+    setAutoFillPortIndices([])
   }
 
   const handleBuildModeConfirm = () => {
@@ -545,8 +557,53 @@ export default function CreateApplication() {
           <Grid size={{ xs: 12 }}><Typography variant="h6" className={styles.sectionTitle}>1. Основная информация</Typography>
             <Grid container spacing={3}>
               <Grid size={{ xs: 12 }}><TextField fullWidth label="Название приложения" placeholder="например, my-awesome-app" value={appName} onChange={(e) => setAppName(e.target.value)} helperText="Название станет именем контейнера" /></Grid>
-              <Grid size={{ xs: 12 }}><TextField fullWidth label="Ссылка на Git-репозиторий" placeholder="https://github.com/org/repo" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} helperText="Сервер склонирует проект в папку пользователя и проверит Dockerfile или docker-compose в корне" /></Grid>
-              <Grid size={{ xs: 12 }}><TextField fullWidth label="Ветка Git" placeholder="main" value={branch} onChange={(e) => setBranch(e.target.value)} helperText="Обязательное поле — укажите ветку для деплоя (например, main, master, develop)" /></Grid>
+              <Grid size={{ xs: 12 }}>
+                <Box className={styles.repoRow}>
+                  <TextField
+                    className={styles.repoField}
+                    fullWidth
+                    label="Ссылка на Git-репозиторий"
+                    placeholder="https://github.com/org/repo"
+                    value={repoUrl}
+                    onChange={(e) => setRepoUrl(e.target.value)}
+                    size="small"
+                  />
+                  <Button
+                    className={styles.autoFillBtn}
+                    variant="outlined"
+                    startIcon={<RefreshCw size={16} />}
+                    onClick={handleAutoFill}
+                    disabled={checking || !repoUrl.trim()}
+                    size="small"
+                  >
+                    Автозаполнение
+                  </Button>
+                </Box>
+                <Typography className={styles.repoHint}>
+                  Сервер склонирует проект в папку пользователя и проверит Dockerfile или docker-compose в корне
+                </Typography>
+              </Grid>
+              <Grid size={{ xs: 12 }}>
+              {check?.branches && check.branches.length > 0 ? (
+                <FormControl fullWidth size="small">
+                  <InputLabel id="branch-label">Ветка Git</InputLabel>
+                  <Select
+                    labelId="branch-label"
+                    value={branch}
+                    label="Ветка Git"
+                    onChange={(e) => setBranch(e.target.value)}
+                    displayEmpty
+                  >
+                    {check.branches.map((b) => (
+                      <MenuItem key={b} value={b}>{b}</MenuItem>
+                    ))}
+                  </Select>
+                  <FormHelperText>Выберите ветку из репозитория</FormHelperText>
+                </FormControl>
+              ) : (
+                <TextField fullWidth label="Ветка Git" placeholder="main" value={branch} onChange={(e) => setBranch(e.target.value)} helperText="Обязательное поле — укажите ветку для деплоя (например, main, master, develop)" />
+              )}
+            </Grid>
             </Grid>
           </Grid>
           <Grid size={{ xs: 12 }}><Divider /></Grid>
@@ -693,7 +750,7 @@ export default function CreateApplication() {
           </Alert>
         ) : isReady ? (
           <Button variant="contained" color="primary" startIcon={<Save size={18} />} disabled={deploying} onClick={handleDeploy}>
-            {deploying ? 'Отправка заявки…' : 'Отправить заявку на запуск'}
+            {deploying ? 'Отправка заявки…' : 'Отправить на рассмотрение'}
           </Button>
         ) : checking ? (
           <>
@@ -704,41 +761,98 @@ export default function CreateApplication() {
             <Button variant="outlined" onClick={handleCancelCheck}>Отмена</Button>
           </>
         ) : (
-          <Button variant="contained" color="primary" startIcon={<GitBranch size={18} />} onClick={handleCheck}>Проверить репозиторий</Button>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={<GitBranch size={18} />}
+            onClick={handleCheck}
+            disabled={!appName.trim() || !repoUrl.trim() || !branch.trim() || !effectiveNodeId}
+          >
+            Проверить репозиторий
+          </Button>
         )}
       </Box>
-      <Dialog open={showBuildModeDialog} onClose={handleBuildModeCancel} maxWidth="md" fullWidth>
+      <Dialog
+        open={showBuildModeDialog}
+        onClose={handleBuildModeCancel}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { bgcolor: 'background.paper', color: 'text.primary', backgroundImage: 'none' } }}
+      >
         <DialogTitle>Выбор способа сборки и запуска</DialogTitle>
         <DialogContent>
           <Typography variant="body1" paragraph>
             Репозиторий проверен. Выберите способ сборки:
           </Typography>
+
+          {check?.detected_env_vars && Object.keys(check.detected_env_vars).length > 0 && (
+            <Box className={styles.detectPanel}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Обнаруженные переменные окружения (из .env / .env.example):
+              </Typography>
+              <Box className={styles.detectList}>
+                {Object.entries(check.detected_env_vars).map(([key, value]) => (
+                  <Typography key={key} variant="body2" fontFamily="monospace">
+                    {key}={value}
+                  </Typography>
+                ))}
+              </Box>
+              <Typography variant="caption" className={styles.detectMeta} sx={{ mt: 1, display: 'block' }}>
+                Эти переменные будут автоматически подставлены в форму. Их можно изменить перед деплоем.
+              </Typography>
+            </Box>
+          )}
+
+          {check?.detected_ports && check.detected_ports.length > 0 && (
+            <Box className={styles.detectPanel}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Обнаруженные порты контейнеров:
+              </Typography>
+              <Typography variant="caption" className={styles.detectMeta} sx={{ mb: 1, display: 'block' }}>
+                Хост-порты будут автоматически подобраны из свободного диапазона ({portsRange.min}–{portsRange.max}) при деплое.
+              </Typography>
+              <Box className={styles.detectList}>
+                {check.detected_ports.map((port, index) => (
+                  <Typography key={index} variant="body2" fontFamily="monospace">
+                    {port.container_port}/{port.protocol}{' '}
+                    <Typography component="span" variant="body2" className={styles.detectMeta}>
+                      (из {portSourceLabel(port)})
+                    </Typography>
+                    {' '}→ авто-порт на хосте
+                  </Typography>
+                ))}
+              </Box>
+            </Box>
+          )}
+
           <RadioGroup value={pendingBuildMode} onChange={(e) => setPendingBuildMode(e.target.value as 'dockerfile' | 'compose')}>
-            {check?.detected_dockerfile && <FormControlLabel value="dockerfile" control={<Radio />} label="Dockerfile — один контейнер" />}
-            {!!check?.compose_file && <FormControlLabel value="compose" control={<Radio />} label={`Docker Compose — ${check.compose_file}`} />}
+            {check?.detected_dockerfile && <FormControlLabel className={styles.detectItem} value="dockerfile" control={<Radio />} label="Dockerfile — один контейнер" />}
+            {!!check?.compose_file && <FormControlLabel className={styles.detectItem} value="compose" control={<Radio />} label={`Docker Compose — ${check.compose_file}`} />}
           </RadioGroup>
           {pendingBuildMode === 'compose' && pendingServices.length > 0 && (
             <Box sx={{ mt: 2 }}>
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 Выберите сервисы, которые нужно запустить:
               </Typography>
-              {pendingServices.map((service) => (
-                <FormControlLabel
-                  key={service}
-                  sx={{ display: 'flex' }}
-                  control={
-                    <Checkbox
-                      checked={pendingServices.includes(service)}
-                      onChange={(e) =>
-                        setPendingServices((prev) =>
-                          e.target.checked ? [...prev, service] : prev.filter((item) => item !== service)
-                        )
-                      }
-                    />
-                  }
-                  label={service}
-                />
-              ))}
+              <Box className={styles.detectList}>
+                {pendingServices.map((service) => (
+                  <FormControlLabel
+                    key={service}
+                    className={styles.detectItem}
+                    control={
+                      <Checkbox
+                        checked={pendingServices.includes(service)}
+                        onChange={(e) =>
+                          setPendingServices((prev) =>
+                            e.target.checked ? [...prev, service] : prev.filter((item) => item !== service)
+                          )
+                        }
+                      />
+                    }
+                    label={service}
+                  />
+                ))}
+              </Box>
             </Box>
           )}
         </DialogContent>
@@ -748,6 +862,173 @@ export default function CreateApplication() {
           </Button>
           <Button onClick={handleBuildModeConfirm} variant="contained" color="primary" disabled={pendingBuildMode === 'compose' && pendingServices.length === 0}>
             Подтвердить
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={showAutoFillDialog}
+        onClose={handleAutoFillCancel}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{ sx: { bgcolor: 'background.paper', color: 'text.primary', backgroundImage: 'none' } }}
+      >
+        <DialogTitle>Автозаполнение из репозитория</DialogTitle>
+        <DialogContent>
+          <Typography variant="body1" paragraph>
+            Репозиторий проверен. Выберите, какие данные применить к форме:
+          </Typography>
+
+          {autoFillCheck?.branches && autoFillCheck.branches.length > 0 && (
+            <Box className={styles.detectPanel}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Ветка Git:
+              </Typography>
+              <RadioGroup value={autoFillBranch} onChange={(e) => setAutoFillBranch(e.target.value)}>
+                {autoFillCheck.branches.map((branchName) => (
+                  <FormControlLabel key={branchName} className={styles.detectItem} value={branchName} control={<Radio />} label={branchName} />
+                ))}
+              </RadioGroup>
+            </Box>
+          )}
+
+          {/* Build mode selection */}
+          {(autoFillCheck?.detected_dockerfile || autoFillCheck?.compose_file) && (
+            <Box className={styles.detectPanel}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Способ сборки:
+              </Typography>
+              <RadioGroup value={pendingBuildMode} onChange={(e) => setPendingBuildMode(e.target.value as 'dockerfile' | 'compose')}>
+                {autoFillCheck?.detected_dockerfile && <FormControlLabel className={styles.detectItem} value="dockerfile" control={<Radio />} label="Dockerfile — один контейнер" />}
+                {autoFillCheck?.compose_file && <FormControlLabel className={styles.detectItem} value="compose" control={<Radio />} label={`Docker Compose — ${autoFillCheck.compose_file}`} />}
+              </RadioGroup>
+              {pendingBuildMode === 'compose' && autoFillCheck?.services && autoFillCheck.services.length > 0 && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Выберите сервисы для запуска:
+                  </Typography>
+                  <Box className={styles.detectList}>
+                    {autoFillCheck.services.map((service) => (
+                      <FormControlLabel
+                        key={service}
+                        className={styles.detectItem}
+                        control={
+                          <Checkbox
+                            checked={pendingServices.includes(service)}
+                            onChange={(e) =>
+                              setPendingServices((prev) =>
+                                e.target.checked ? [...prev, service] : prev.filter((item) => item !== service)
+                              )
+                            }
+                          />
+                        }
+                        label={service}
+                      />
+                    ))}
+                  </Box>
+                </Box>
+              )}
+            </Box>
+          )}
+
+          {autoFillCheck?.detected_env_vars && Object.keys(autoFillCheck.detected_env_vars).length > 0 && (
+            <Box className={styles.detectPanel}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Переменные окружения (из .env / .env.example):
+              </Typography>
+              <Box className={styles.detectList}>
+                {Object.entries(autoFillCheck.detected_env_vars).map(([key, value]) => {
+                  const isSelected = autoFillEnvKeys.includes(key)
+                  return (
+                    <FormControlLabel
+                      key={key}
+                      className={styles.detectItem}
+                      control={
+                        <Checkbox
+                          checked={isSelected}
+                          onChange={(e) =>
+                            setAutoFillEnvKeys((prev) =>
+                              e.target.checked ? [...prev, key] : prev.filter((k) => k !== key)
+                            )
+                          }
+                        />
+                      }
+                      label={
+                        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                          <Typography variant="body2" fontFamily="monospace">{key}={value}</Typography>
+                          <Typography variant="caption" className={styles.detectMeta}>Найдено в .env / .env.example</Typography>
+                        </Box>
+                      }
+                    />
+                  )
+                })}
+              </Box>
+              <Typography variant="caption" className={styles.detectMeta} sx={{ mt: 1, display: 'block' }}>
+                Выбранные переменные будут добавлены в форму. Можно редактировать перед деплоем.
+              </Typography>
+            </Box>
+          )}
+
+          {autoFillCheck?.detected_ports && autoFillCheck.detected_ports.length > 0 && (
+            <Box className={styles.detectPanel}>
+              <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+                Порты контейнеров:
+              </Typography>
+              <Typography variant="caption" className={styles.detectMeta} sx={{ mb: 1, display: 'block' }}>
+                Хост-порты будут автоматически подобраны из свободного диапазона ({portsRange.min}–{portsRange.max}).
+              </Typography>
+              <Box className={styles.detectList}>
+                {autoFillCheck.detected_ports
+                  .filter((port) => {
+                    // Filter ports by selected build mode
+                    if (pendingBuildMode === 'dockerfile') {
+                      return port.source === 'dockerfile'
+                    }
+                    if (pendingBuildMode === 'compose') {
+                      return port.source === 'compose'
+                    }
+                    return true
+                  })
+                  .map((port, filteredIndex) => {
+                    // Find original index for selection tracking
+                    const originalIndex = autoFillCheck.detected_ports.findIndex(p => p === port)
+                    const isSelected = autoFillPortIndices.includes(originalIndex)
+                    return (
+                    <FormControlLabel
+                      key={originalIndex}
+                      className={styles.detectItem}
+                      control={
+                        <Checkbox
+                          checked={isSelected}
+                          onChange={(e) =>
+                            setAutoFillPortIndices((prev) =>
+                              e.target.checked ? [...prev, originalIndex] : prev.filter((i) => i !== originalIndex)
+                            )
+                          }
+                        />
+                      }
+                      label={
+                        <Typography variant="body2" fontFamily="monospace">
+                          {port.container_port}/{port.protocol}{' '}
+                          <Typography component="span" variant="body2" className={styles.detectMeta}>
+                            (из {portSourceLabel(port)})
+                          </Typography>
+                          {' '}→ авто-порт на хосте
+                        </Typography>
+                      }
+                    />
+                  )
+                })}
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleAutoFillCancel} variant="outlined">
+            Отмена
+          </Button>
+          <Button onClick={handleAutoFillApply} variant="contained" color="primary" disabled={!autoFillBranch && autoFillEnvKeys.length === 0 && autoFillPortIndices.length === 0}>
+            Применить
           </Button>
         </DialogActions>
       </Dialog>

@@ -56,6 +56,8 @@ export interface DeploymentRequest {
   diskGB: number
   durationHours: number
   services: string[]
+  buildMode?: 'dockerfile' | 'compose'
+  branch?: string
   price: number
   status: string
   comment: string

@@ -1,15 +1,10 @@
-import { Typography, Button } from '@mui/material'
+import { Typography } from '@mui/material'
 import { Server } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { APP_NAME, APP_VERSION, APP_COPYRIGHT } from '../../config/appConfig'
+import { APP_NAME, APP_VERSION } from '../../config/appConfig'
 import styles from './Footer.module.scss'
 
-interface FooterProps {
-  version?: string
-  hideLinks?: boolean
-}
 
-export default function Footer({ version = APP_VERSION, hideLinks = false }: FooterProps) {
+export default function Footer() {
   return (
     <footer className={styles.footer}>
       <div className={styles.footer__inner}>
@@ -18,7 +13,7 @@ export default function Footer({ version = APP_VERSION, hideLinks = false }: Foo
           <Typography variant="body2" sx={{ fontWeight: 700 }}>{APP_NAME}</Typography>
         </div>
 
-        <div className={styles.footer__version}>{version}</div>
+        <div className={styles.footer__version}>{APP_VERSION}</div>
 
       </div>
     </footer>

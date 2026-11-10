@@ -1,15 +1,16 @@
-import { useEffect, useState } from 'react'
-import { Box, Typography, Button, Card, CardContent, Chip, Stack, CircularProgress, Alert, Tabs, Tab } from '@mui/material'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Box, Typography, Button, Card, CardContent, Chip, Stack, CircularProgress, Alert, Tabs, Tab, Snackbar } from '@mui/material'
 import { DataGrid } from '@mui/x-data-grid'
 import type { GridColDef } from '@mui/x-data-grid'
 import { useNavigate } from 'react-router-dom'
-import { Plus } from 'lucide-react'
-import { fetchMine } from '../../api/containers'
-import type { MineContainer } from '../../api/containers'
-import { fetchMyDeploymentRequests } from '../../api/deploymentRequests'
-import type { DeploymentRequest } from '../../api/deploymentRequests'
+import { Plus, RefreshCw, AlertCircle } from 'lucide-react'
+import { fetchMine, fetchContainerSpec, refreshContainerByApp } from '../../api/containers'
 import styles from './Applications.module.scss'
 import { statusLabel, statusColor } from '../../utils/status'
+import { useRealtimeStatus } from '../../hooks/useRealtime'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { containerStatusPatched, fetchMineContainers } from '../../store/slices/containersSlice'
+import { fetchMineRequests } from '../../store/slices/deploymentRequestsSlice'
 
 function formatDate(iso: string) {
   const d = new Date(iso)
@@ -27,21 +28,111 @@ const dataGridSx = {
 
 export default function Applications() {
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const [tab, setTab] = useState(0)
-  const [rows, setRows] = useState<MineContainer[]>([])
-  const [requests, setRequests] = useState<DeploymentRequest[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const rows = useAppSelector((state) => state.containers.mine)
+  const requests = useAppSelector((state) => state.deploymentRequests.mine)
+  const loading = useAppSelector(
+    (state) => state.containers.mineStatus === 'idle' || state.containers.mineStatus === 'loading',
+  )
+  const error = useAppSelector((state) => state.containers.mineError)
+  const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null)
+  const connected = useRealtimeStatus()
 
   useEffect(() => {
-    Promise.all([fetchMine(), fetchMyDeploymentRequests()])
-      .then(([mineRes, reqRes]) => {
-        setRows(mineRes.data)
-        setRequests(reqRes)
-      })
-      .catch(() => setError('Не удалось загрузить данные'))
-      .finally(() => setLoading(false))
-  }, [])
+    void dispatch(fetchMineContainers())
+    void dispatch(fetchMineRequests())
+  }, [dispatch])
+
+  // Verify actual container status for all containers
+  const verifyContainerStatuses = useCallback(async () => {
+    setSyncing(true)
+    setSyncError(null)
+    setSyncSuccess(null)
+
+    try {
+      // Fetch fresh container list from backend to avoid stale closure
+      const mineRes = await fetchMine()
+      const currentRows = mineRes.data
+
+      if (currentRows.length === 0) {
+        setSyncSuccess('Статусы актуальны, изменений нет')
+        setSyncing(false)
+        return
+      }
+
+      // Fetch all container specs in parallel
+      const specResults = await Promise.allSettled(
+        currentRows.map(container => fetchContainerSpec(container.id))
+      )
+
+      let correctedCount = 0
+      let refreshedCount = 0
+
+      for (let i = 0; i < currentRows.length; i++) {
+        const container = currentRows[i]
+        const specResult = specResults[i]
+
+        if (specResult.status === 'fulfilled') {
+          const actualStatus = specResult.value.data.status
+          if (actualStatus !== container.status) {
+            dispatch(containerStatusPatched({ id: container.id, status: actualStatus }))
+            correctedCount++
+          }
+        } else {
+          // Handle 404 - backend DB out of sync with Docker on agent
+          // Try to trigger a refresh from the agent
+          const err = specResult.reason
+          if (err?.status === 404 && container.app_name) {
+            try {
+              await refreshContainerByApp(container.app_name)
+              refreshedCount++
+            } catch (refreshErr) {
+              console.warn(`Failed to refresh container ${container.id}:`, refreshErr)
+            }
+          } else {
+            console.warn(`Failed to verify status for container ${container.id}:`, err)
+          }
+        }
+      }
+
+      const messages: string[] = []
+      if (correctedCount > 0) messages.push(`исправлено ${correctedCount}`)
+      if (refreshedCount > 0) messages.push(`запрошено обновление: ${refreshedCount}`)
+      if (messages.length > 0) {
+        setSyncSuccess(`Синхронизация: ${messages.join(', ')}`)
+      } else {
+        setSyncSuccess('Статусы актуальны, изменений нет')
+      }
+    } catch {
+      setSyncError('Не удалось синхронизировать статусы')
+    } finally {
+      setSyncing(false)
+    }
+  }, [dispatch])
+
+  // Auto-verify status on initial load for all containers (only once)
+  const verifiedRef = useRef(false)
+  useEffect(() => {
+    if (!verifiedRef.current && rows.length > 0) {
+      verifiedRef.current = true
+      void verifyContainerStatuses()
+    }
+  }, [rows.length, verifyContainerStatuses])
+
+  // Fallback status sync: only while the WebSocket is down.
+  useEffect(() => {
+    if (connected) return
+    const interval = setInterval(() => {
+      if (rows.length > 0) {
+        verifyContainerStatuses()
+      }
+    }, 30000)
+
+    return () => clearInterval(interval)
+  }, [rows, connected, verifyContainerStatuses])
 
   const columns: GridColDef[] = [
     { field: 'app_name', headerName: 'Название приложения', flex: 1, minWidth: 200, align: 'center', headerAlign: 'center' },
@@ -117,9 +208,19 @@ export default function Applications() {
     <Box className={styles.page}>
       <Box className={styles.header}>
         <Typography variant="h5" className={styles.header__title}>Приложения</Typography>
-        <Button variant="contained" color="primary" startIcon={<Plus size={18} />} onClick={() => navigate('/applications/new')}>
-          Создать приложение
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshCw size={18} />}
+            onClick={verifyContainerStatuses}
+            disabled={syncing || rows.length === 0}
+          >
+            {syncing ? 'Синхронизация...' : 'Синхронизировать статусы'}
+          </Button>
+          <Button variant="contained" color="primary" startIcon={<Plus size={18} />} onClick={() => navigate('/applications/new')}>
+            Создать приложение
+          </Button>
+        </Stack>
       </Box>
       <Card>
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2 }}>
@@ -128,6 +229,17 @@ export default function Applications() {
         </Tabs>
       </Card>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => setSyncError(null)}>
+        <Alert severity="error" onClose={() => setSyncError(null)} sx={{ flexGrow: 1 }}>
+          <AlertCircle size={18} sx={{ mr: 1 }} />
+          {syncError}
+        </Alert>
+      </Snackbar>
+      <Snackbar open={!!syncSuccess} autoHideDuration={6000} onClose={() => setSyncSuccess(null)}>
+        <Alert severity="success" onClose={() => setSyncSuccess(null)} sx={{ flexGrow: 1 }}>
+          {syncSuccess}
+        </Alert>
+      </Snackbar>
       <Card>
         <CardContent className={styles.cardContentNoPad}>
           <Box className={styles.gridWrap}>

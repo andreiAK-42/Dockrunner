@@ -28,6 +28,7 @@ import (
 	"dockrunner_backend/internal/modules/users"
 	"dockrunner_backend/internal/modules/volumes"
 	"dockrunner_backend/internal/oplock"
+	"dockrunner_backend/internal/realtime"
 	"dockrunner_backend/pkg/database/influxdb"
 	"dockrunner_backend/pkg/queue"
 	"dockrunner_backend/pkg/token"
@@ -47,6 +48,7 @@ type Dependencies struct {
 	// Shared instances built in main and also used by the events consumer.
 	// If nil, the router builds local ones (dev mode without task results).
 	OpTracker              *oplock.Tracker
+	Realtime               *realtime.Hub
 	AdminService           *admin.Service
 	VolumesService         *volumes.Service
 	ContainersService      *containers.Service
@@ -114,6 +116,14 @@ func New(deps Dependencies) *gin.Engine {
 	api := r.Group("/api")
 	v1 := api.Group("/v1")
 
+	// --- Realtime events (WebSocket, query-token auth) ---
+	hub := deps.Realtime
+	if hub == nil {
+		hub = realtime.NewHub(deps.Logger)
+	}
+	realtimeHandler := realtime.NewHandler(hub, deps.Logger, deps.Config.JWTSecret)
+	v1.GET("/ws", realtimeHandler.Stream)
+
 	tokenMgr := token.NewManager(deps.Config.JWTSecret, deps.Config.JWTAccessTTL, deps.Config.JWTRefreshTTL)
 
 	// --- Auth ---
@@ -173,7 +183,7 @@ func New(deps Dependencies) *gin.Engine {
 	// NOTE: must reuse the consumer's instance — checks live in its memory.
 	containersService := deps.ContainersService
 	if containersService == nil {
-		containersService = containers.NewService(adminRepo, agentsRepo, volumesService, deps.Config.AgentToken, deps.Queue, deps.Logger, deps.OpTracker, containers.PortsPolicy{Min: deps.Config.PortsMin, Max: deps.Config.PortsMax})
+		containersService = containers.NewService(adminRepo, agentsRepo, volumesService, deps.Config.AgentToken, deps.Queue, deps.Logger, deps.OpTracker, containers.PortsPolicy{Min: deps.Config.PortsMin, Max: deps.Config.PortsMax}, hub)
 	}
 	containersHandler := containers.NewHandler(containersService, deps.Logger, deps.Config.JWTSecret)
 	containers.RegisterRoutes(v1, containersHandler, deps.Config.JWTSecret)
@@ -234,7 +244,7 @@ func New(deps Dependencies) *gin.Engine {
 	}
 	deploymentRequestsService := deps.DeploymentRequestsService
 	if deploymentRequestsService == nil {
-		deploymentRequestsService = deploymentrequests.NewService(deploymentRequestsRepo, pricingRepo, containersService, balancesService, deps.Logger)
+		deploymentRequestsService = deploymentrequests.NewService(deploymentRequestsRepo, pricingRepo, containersService, balancesService, deps.Logger, hub)
 	}
 	deploymentRequestsHandler := deploymentrequests.NewHandler(deploymentRequestsService, deps.Logger, deps.Config.IsDevelopment())
 	deploymentrequests.RegisterRoutes(v1, deploymentRequestsHandler, deps.Config.JWTSecret)

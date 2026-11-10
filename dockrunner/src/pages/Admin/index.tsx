@@ -1,9 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Box, Typography, Card, Tabs, Tab, Divider, Alert } from '@mui/material'
 import { DollarSign, CreditCard } from 'lucide-react'
-import { fetchAdminUsers, fetchTariffPlans, fetchAdminContainers, adminContainerAction, rebootServer, fetchPendingRequests, fetchPricing, fetchAllTransactions } from '../../api/admin'
-import type { AdminUser, AdminContainer, TariffPlan, DeploymentRequest, PricingRate, BalanceTransaction } from '../../api/admin'
+import { fetchAdminUsers, fetchTariffPlans, adminContainerAction, rebootServer, fetchPricing, fetchAllTransactions } from '../../api/admin'
+import type { AdminUser, TariffPlan, PricingRate, BalanceTransaction } from '../../api/admin'
 import { useAgents } from '../../hooks/useAgents'
+import { useRealtimeStatus } from '../../hooks/useRealtime'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { fetchAdminContainersThunk } from '../../store/slices/containersSlice'
+import { fetchPendingRequestsThunk } from '../../store/slices/deploymentRequestsSlice'
 import UsersTab from './tabs/UsersTab'
 import ContainersTab from './tabs/ContainersTab'
 import ServersTab from './tabs/ServersTab'
@@ -12,14 +16,13 @@ import PricingTab from './tabs/PricingTab'
 import BalancesTab from './tabs/BalancesTab'
 import styles from './Admin.module.scss'
 
-type AdminData = [AdminUser[], { data: TariffPlan[] }, AdminContainer[], DeploymentRequest[], PricingRate[], { data: BalanceTransaction[]; total: number }]
-
 export default function Admin() {
+  const dispatch = useAppDispatch()
   const [tab, setTab] = useState(0)
   const [users, setUsers] = useState<AdminUser[]>([])
   const [plans, setPlans] = useState<TariffPlan[]>([])
-  const [containers, setContainers] = useState<AdminContainer[]>([])
-  const [pendingRequests, setPendingRequests] = useState<DeploymentRequest[]>([])
+  const containers = useAppSelector((state) => state.containers.admin)
+  const pendingRequests = useAppSelector((state) => state.deploymentRequests.pending)
   const [pricing, setPricing] = useState<PricingRate[]>([])
   const [transactions, setTransactions] = useState<BalanceTransaction[]>([])
   const [transactionsTotal, setTransactionsTotal] = useState(0)
@@ -28,60 +31,50 @@ export default function Admin() {
   const [rebooting, setRebooting] = useState('')
   const [actingId, setActingId] = useState('')
   const { nodes, loading: nodesLoading } = useAgents()
+  const connected = useRealtimeStatus()
 
-  const loadData = () => {
-    return Promise.all([
+  const reloadAll = useCallback(() => {
+    Promise.all([
       fetchAdminUsers(),
       fetchTariffPlans(),
-      fetchAdminContainers(),
-      fetchPendingRequests(),
       fetchPricing(),
       fetchAllTransactions(1, 20),
     ])
-  }
-
-  const applyData = ([loadedUsers, plansResponse, loadedContainers, loadedPending, loadedPricing, loadedTransactions]: AdminData) => {
-    setUsers(loadedUsers)
-    setPlans(plansResponse.data)
-    setContainers(loadedContainers)
-    setPendingRequests(loadedPending)
-    setPricing(loadedPricing)
-    setTransactions(loadedTransactions.data)
-    setTransactionsTotal(loadedTransactions.total)
-  }
-
-  const failLoad = () => {
-    setError('Не удалось загрузить данные. Проверьте соединение с сервером.')
-  }
-
-  const reloadAll = () => {
-    setError('')
-    loadData().then(applyData).catch(failLoad)
-  }
+      .then(([loadedUsers, plansResponse, loadedPricing, loadedTransactions]) => {
+        setUsers(loadedUsers)
+        setPlans(plansResponse.data)
+        setPricing(loadedPricing)
+        setTransactions(loadedTransactions.data)
+        setTransactionsTotal(loadedTransactions.total)
+        setError('')
+      })
+      .catch(() => {
+        setError('Не удалось загрузить данные. Проверьте соединение с сервером.')
+      })
+    void dispatch(fetchAdminContainersThunk())
+    void dispatch(fetchPendingRequestsThunk())
+  }, [dispatch])
 
   useEffect(() => {
-    let active = true
-    loadData().then((data) => { if (active) applyData(data) }).catch(failLoad)
+    reloadAll()
+
+    // Fallback poll: while the WebSocket is connected updates arrive as events.
     const timer = window.setInterval(() => {
-      fetchAdminContainers().then((latest) => {
-        if (active) setContainers(latest)
-      }).catch(() => {
-        // Не показываем ошибку при единичном сбое фонового обновления.
-      })
-    }, 5000)
+      if (connected) return
+      void dispatch(fetchAdminContainersThunk())
+    }, 15000)
 
     // Listen for custom reload event from container edit dialog
     const handleReload = () => {
-      if (active) reloadAll()
+      reloadAll()
     }
     window.addEventListener('admin-data-reload', handleReload)
 
     return () => {
-      active = false
       window.clearInterval(timer)
       window.removeEventListener('admin-data-reload', handleReload)
     }
-  }, [])
+  }, [connected, dispatch, reloadAll])
 
   const handleContainerAction = (id: string, action: 'stop' | 'restart' | 'remove') => {
     if (actingId) return

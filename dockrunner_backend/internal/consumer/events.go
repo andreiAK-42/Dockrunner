@@ -8,10 +8,11 @@ import (
 
 	"dockrunner_backend/internal/modules/admin"
 	"dockrunner_backend/internal/modules/containers"
+	"dockrunner_backend/internal/realtime"
 	"dockrunner_backend/pkg/queue"
 )
 
-func StartEvents(ctx context.Context, q *queue.Client, adminService *admin.Service, containersService *containers.Service, logger *zap.Logger) error {
+func StartEvents(ctx context.Context, q *queue.Client, adminService *admin.Service, containersService *containers.Service, hub *realtime.Hub, logger *zap.Logger) error {
 	return q.Consume(queue.QueueEvents, func(ctx context.Context, body []byte) error {
 		var event admin.AgentEvent
 		if err := json.Unmarshal(body, &event); err != nil {
@@ -20,11 +21,21 @@ func StartEvents(ctx context.Context, q *queue.Client, adminService *admin.Servi
 
 		switch event.Type {
 		case "prepare.completed":
-			containersService.ResolveCheck(event.DeploymentID, true, event.DetectedDockerfile, event.ComposeFile, event.Services, "")
-			logger.Info("prepare resolved", zap.String("deployment", event.DeploymentID), zap.Bool("dockerfile", event.DetectedDockerfile), zap.String("compose", event.ComposeFile), zap.Strings("services", event.Services))
+			// Convert admin.DetectedPort to containers.DetectedPort
+			detectedPorts := make([]containers.DetectedPort, len(event.DetectedPorts))
+			for i, p := range event.DetectedPorts {
+				detectedPorts[i] = containers.DetectedPort{
+					ContainerPort: p.ContainerPort,
+					Protocol:      p.Protocol,
+					Source:        p.Source,
+					Service:       p.Service,
+				}
+			}
+			containersService.ResolveCheck(event.DeploymentID, true, event.DetectedDockerfile, event.ComposeFile, event.Services, event.Branches, event.DetectedEnvVars, detectedPorts, "")
+			logger.Info("prepare resolved", zap.String("deployment", event.DeploymentID), zap.Bool("dockerfile", event.DetectedDockerfile), zap.String("compose", event.ComposeFile), zap.Strings("services", event.Services), zap.Strings("branches", event.Branches), zap.Any("env_vars", event.DetectedEnvVars), zap.Any("ports", detectedPorts))
 			return nil
 		case "prepare.failed":
-			containersService.ResolveCheck(event.DeploymentID, false, false, "", nil, event.Message)
+			containersService.ResolveCheck(event.DeploymentID, false, false, "", nil, nil, nil, nil, event.Message)
 			logger.Info("prepare resolved", zap.String("deployment", event.DeploymentID), zap.String("failed", event.Message))
 			return nil
 		}
@@ -34,9 +45,41 @@ func StartEvents(ctx context.Context, q *queue.Client, adminService *admin.Servi
 			return err
 		}
 
+		publishContainerEvent(hub, event)
 		releaseOpForTerminal(event, containersService)
 		return nil
 	})
+}
+
+// publishContainerEvent pushes the terminal state of a container to the
+// owner's browser and to administrators. Check events are published by the
+// containers service itself (ResolveCheck).
+func publishContainerEvent(hub *realtime.Hub, event admin.AgentEvent) {
+	payload := map[string]any{
+		"id":          event.DeploymentID,
+		"app_id":      event.AppID,
+		"app_name":    event.AppName,
+		"owner_login": event.OwnerLogin,
+		"image":       event.Image,
+		"node_id":     event.AgentID,
+		"ports":       event.Ports,
+	}
+
+	switch event.Type {
+	case "deploy.completed", "container.restarted":
+		payload["status"] = "running"
+	case "deploy.failed", "op.failed":
+		payload["status"] = "error"
+		payload["error"] = event.Message
+	case "container.stopped":
+		payload["status"] = "stopped"
+	case "container.removed":
+		payload["removed"] = true
+	default:
+		return
+	}
+
+	hub.Emit("container.updated", realtime.TopicContainers, event.OwnerLogin, payload)
 }
 
 // releaseOpForTerminal снимает блокировку операции, когда пришло терминальное событие.

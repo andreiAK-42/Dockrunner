@@ -1,26 +1,32 @@
-import { Box, Button, Card, CardContent, Chip, Stack, Typography, Divider, Tab, Tabs, FormControl, InputLabel, Select, MenuItem, Alert, Tooltip, TextField } from '@mui/material'
-import { ArrowLeft, Play, Square, RefreshCw, Terminal, HardDrive as HD, Copy, Download, Box as BoxIcon, Server, Activity, Trash2, ExternalLink } from 'lucide-react'
+import { Box, Button, Card, CardContent, Chip, Stack, Typography, Divider, Tab, Tabs, FormControl, InputLabel, Select, MenuItem, Alert, Tooltip, TextField, Snackbar } from '@mui/material'
+import { ArrowLeft, Play, Square, RefreshCw, Terminal, HardDrive as HD, Copy, Download, Box as BoxIcon, Server, Activity, Trash2, ExternalLink, AlertCircle } from 'lucide-react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { copyText } from '../../utils/clipboard'
-import { refreshContainerByApp, removeContainer, startContainer, stopContainer, fetchMine, fetchBuildLog, fetchContainerLogs, fetchContainerSpec, applyDockerCommand } from '../../api/containers'
+import { refreshContainerByApp, removeContainer, startContainer, stopContainer, fetchMine, fetchBuildLog, fetchContainerSpec, applyDockerCommand } from '../../api/containers'
 import type { MineContainer, ContainerSpec } from '../../api/containers'
 import { ApiError, apiBase, getToken } from '../../api/client'
 import { timeAgo } from '../../utils/time'
 import { useEnvConfigs } from '../../hooks/useEnvConfigs'
+import { useRealtimeStatus } from '../../hooks/useRealtime'
+import { useContainerLogs } from '../../hooks/useContainerLogs'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { containerStatusPatched, fetchMineContainers } from '../../store/slices/containersSlice'
 import { toDockerEnvArgs } from '../../types/envConfig'
 import PortQuota from '../../components/PortQuota'
 import styles from './ApplicationDetails.module.scss'
 
 import { statusLabel, IN_PROGRESS_STATUSES } from '../../utils/status'
 
-const POLL_INTERVAL_MS = 2000
+const POLL_INTERVAL_MS = 5000
 const DELETE_TIMEOUT_MS = 120000
 const OPERATION_TIMEOUT_MS = 90000
 const REFRESH_TIMEOUT_MS = 600000
-const BUILD_LOG_POLL_MS = 2000
+const BUILD_LOG_POLL_MS = 5000
 const MESSAGE_HIDE_MS = 8000
 const CONFIRM_RESET_MS = 5000
+const MAX_BUILD_LOG_LINES = 2000
+const MAX_LOG_LINES = 1000
 
 function shellArg(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value
@@ -62,6 +68,7 @@ function getErrorText(error: unknown, fallback: string): string {
 export default function ApplicationDetails() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const [tab, setTab] = useState(0)
   const { configs } = useEnvConfigs()
   const [envConfigId, setEnvConfigId] = useState('')
@@ -73,14 +80,65 @@ export default function ApplicationDetails() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [acting, setActing] = useState<'' | 'start' | 'stop' | 'restart'>('')
   const [updateMsg, setUpdateMsg] = useState<{ ok: boolean; text: string } | null>(null)
-  const [record, setRecord] = useState<MineContainer | null>(null)
+  const record = useAppSelector(
+    (state) => state.containers.mine.find((container) => container.app_name === id) || null,
+  )
   const [buildLog, setBuildLog] = useState<string | null>(null)
   const [buildLogError, setBuildLogError] = useState('')
   const buildLogBoxRef = useRef<HTMLDivElement | null>(null)
-  const [logs, setLogs] = useState<string[] | null>(null)
-  const [logsLoadedFor, setLogsLoadedFor] = useState('')
   const [spec, setSpec] = useState<ContainerSpec | null>(null)
+  const [followBuildLog, setFollowBuildLog] = useState(true)
   const cancelWaitRef = useRef(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null)
+  const connected = useRealtimeStatus()
+
+  // Verify actual container status by fetching spec
+  const verifyContainerStatus = useCallback(async () => {
+    setSyncing(true)
+    setSyncError(null)
+    setSyncSuccess(null)
+
+    try {
+      // Fetch fresh record from backend to avoid stale closure
+      const mineRes = await fetchMine()
+      const currentRecord = mineRes.data.find((c) => c.app_name === id) || null
+
+      if (!currentRecord) {
+        setSyncError('Контейнер не найден')
+        setSyncing(false)
+        return
+      }
+
+      const specRes = await fetchContainerSpec(currentRecord.id)
+      const actualStatus = specRes.data.status
+
+      if (actualStatus !== currentRecord.status) {
+        dispatch(containerStatusPatched({ id: currentRecord.id, status: actualStatus }))
+        setSyncSuccess(`Статус исправлен: было "${currentRecord.status}", стало "${actualStatus}"`)
+      } else {
+        setSyncSuccess('Статус актуален, изменений нет')
+      }
+      // Also update spec
+      setSpec(specRes.data)
+    } catch (err: any) {
+      // Handle 404 - backend DB out of sync with Docker on agent
+      // Try to trigger a refresh from the agent
+      if (err?.status === 404) {
+        try {
+          await refreshContainerByApp(id || '')
+          setSyncSuccess('Запрошено обновление с агента, статус обновится через несколько секунд')
+        } catch {
+          setSyncError('Не удалось запросить обновление контейнера')
+        }
+      } else {
+        setSyncError('Не удалось проверить статус контейнера')
+      }
+    } finally {
+      setSyncing(false)
+    }
+  }, [id, dispatch])
 
   const busy = updating || deleting || applyingCommand || acting !== ''
 
@@ -100,27 +158,39 @@ export default function ApplicationDetails() {
   }, [])
 
   useEffect(() => {
-    fetchMine()
-      .then((res) => {
-        const foundRecord = res.data.find((container) => container.app_name === id) || null
-        setRecord(foundRecord)
-      })
-      .catch(() => setRecord(null))
-  }, [id])
+    void dispatch(fetchMineContainers())
+  }, [id, dispatch])
 
-  // Poll for record updates while building or during operations
+  // Auto-verify status on initial load only (not on every record change to avoid loops)
+  const verifiedRef = useRef(false)
   useEffect(() => {
-    if (!record || (!IN_PROGRESS_STATUSES.has(record.status) && !busy)) {
+    if (!verifiedRef.current && record) {
+      verifiedRef.current = true
+      void verifyContainerStatus()
+    }
+  }, [record, verifyContainerStatus])
+
+  // Fallback status sync: only while the WebSocket is down.
+  useEffect(() => {
+    if (!record || connected) return
+
+    const interval = setInterval(() => {
+      verifyContainerStatus()
+    }, 30000)
+
+    return () => clearInterval(interval)
+  }, [record, connected, verifyContainerStatus])
+
+  // Fallback record polling while building: with WS events this is rarely used.
+  useEffect(() => {
+    if (connected || !record || (!IN_PROGRESS_STATUSES.has(record.status) && !busy)) {
       return
     }
     let alive = true
     const pollRecord = async () => {
+      if (!alive) return
       try {
-        const res = await fetchMine()
-        const found = res.data.find((c) => c.id === record.id) || null
-        if (alive && found) {
-          setRecord(found)
-        }
+        await dispatch(fetchMineContainers()).unwrap()
       } catch {
         // ignore
       }
@@ -130,7 +200,7 @@ export default function ApplicationDetails() {
       alive = false
       clearInterval(timer)
     }
-  }, [record?.id, record?.status, busy])
+  }, [record?.id, record?.status, busy, connected, dispatch])
 
   useEffect(() => {
     if (!record) {
@@ -142,13 +212,9 @@ export default function ApplicationDetails() {
       .catch(() => setSpec(null))
   }, [record])
 
-  let wantLogs = ''
-  if (tab === 1 && record) {
-    wantLogs = record.id
-  }
-
-  const isStaleLogs = logsLoadedFor !== wantLogs
-  const logsLoading = wantLogs !== '' && (logs === null || isStaleLogs)
+  const logsEnabled = tab === 1 && !!record
+  const { lines: logs, error: logsError, live: logsLive } = useContainerLogs(record?.id || '', logsEnabled, MAX_LOG_LINES)
+  const logsLoading = logsEnabled && logs === null && !logsError
 
   const isBuilding = record ? IN_PROGRESS_STATUSES.has(record.status) : false
   const recordId = record?.id
@@ -174,6 +240,11 @@ export default function ApplicationDetails() {
       setBuildLog((prev) => {
         if (prev === null || prev === '') {
           return line
+        }
+        const lines = prev.split('\n')
+        if (lines.length >= MAX_BUILD_LOG_LINES) {
+          // Keep only the last MAX_BUILD_LOG_LINES - 1 lines plus the new one
+          return lines.slice(-(MAX_BUILD_LOG_LINES - 1)).join('\n') + '\n' + line
         }
         return `${prev}\n${line}`
       })
@@ -239,39 +310,12 @@ export default function ApplicationDetails() {
   }, [isBuilding, recordId])
 
   useEffect(() => {
+    if (!followBuildLog) return
     const logBox = buildLogBoxRef.current
     if (logBox) {
       logBox.scrollTop = logBox.scrollHeight
     }
-  }, [buildLog])
-
-  useEffect(() => {
-    if (!wantLogs) {
-      return
-    }
-
-    const loadingFor = wantLogs
-    let alive = true
-    fetchContainerLogs(loadingFor)
-      .then((res) => {
-        if (!alive) {
-          return
-        }
-        setLogs(res.data.split('\n'))
-        setLogsLoadedFor(loadingFor)
-      })
-      .catch(() => {
-        if (!alive) {
-          return
-        }
-        setLogs([])
-        setLogsLoadedFor(loadingFor)
-      })
-
-    return () => {
-      alive = false
-    }
-  }, [wantLogs])
+  }, [buildLog, followBuildLog])
 
   const handleCopyLogs = () => {
     const allLogs = (logs || []).join('\n')
@@ -293,9 +337,8 @@ export default function ApplicationDetails() {
       }
 
       try {
-        const res = await fetchMine()
-        const found = res.data.find((container) => container.id === waitedId) || null
-        setRecord(found)
+        const containers = await dispatch(fetchMineContainers()).unwrap()
+        const found = containers.find((container) => container.id === waitedId) || null
         if (done(found)) {
           return found
         }
@@ -349,7 +392,7 @@ export default function ApplicationDetails() {
   }
 
   const handleRefresh = async () => {
-    if (!app || !record || updating) {
+    if (!id || !record || updating) {
       return
     }
 
@@ -400,9 +443,7 @@ export default function ApplicationDetails() {
       const refreshed = await fetchContainerSpec(record.id)
       setSpec(refreshed.data)
       showMessage(true, 'Параметры применены: контейнер пересоздан.')
-      const mine = await fetchMine()
-      const latest = mine.data.find((item) => item.id === record.id)
-      if (latest) setRecord(latest)
+      await dispatch(fetchMineContainers()).unwrap()
     } catch (e) {
       showMessage(false, e instanceof Error ? e.message : 'Не удалось применить параметры')
     } finally {
@@ -473,10 +514,35 @@ export default function ApplicationDetails() {
           <Typography variant="h4" className={styles.header__title}>{record?.app_name || id} <Chip size="small" color={record?.status === 'running' ? 'success' : record?.status === 'error' ? 'error' : 'default'} label={record ? statusLabel(record.status) : '—'} /></Typography>
           <Stack direction="row" spacing={1} alignItems="center" className={styles.header__meta}><Typography variant="body2" color="text.secondary">{spec?.image || record?.image || '—'} • {record?.node_id || '—'}</Typography></Stack>
         </Box>
-        <Stack direction="row" spacing={1} className={styles.header__actions}><Button variant="outlined" startIcon={<RefreshCw size={16} />} disabled={!record || busy} onClick={() => handleOp('restart')}>{acting === 'restart' ? 'Перезапуск...' : 'Перезапустить'}</Button><Button variant="outlined" startIcon={<Download size={16} />} disabled={!record || busy} onClick={handleRefresh}>{updating ? 'Обновление...' : 'Обновить'}</Button><Button variant="contained" color="success" startIcon={<Play size={16} />} sx={{ color: '#fff' }} disabled={!record || busy} onClick={() => handleOp('start')}>{acting === 'start' ? 'Запуск...' : 'Старт'}</Button><Button variant="contained" color="error" startIcon={<Square size={16} />} sx={{ color: '#fff' }} disabled={!record || busy} onClick={() => handleOp('stop')}>{acting === 'stop' ? 'Остановка...' : 'Стоп'}</Button><Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} disabled={!record || busy} onClick={handleDelete}>{deleting ? 'Удаление...' : confirmDelete ? 'Точно удалить?' : 'Удалить'}</Button></Stack>
+        <Stack direction="row" spacing={1} className={styles.header__actions}>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshCw size={16} />}
+            onClick={verifyContainerStatus}
+            disabled={!record || busy || syncing}
+          >
+            {syncing ? 'Проверка...' : 'Проверить статус'}
+          </Button>
+          <Button variant="outlined" startIcon={<RefreshCw size={16} />} disabled={!record || busy} onClick={() => handleOp('restart')}>{acting === 'restart' ? 'Перезапуск...' : 'Перезапустить'}</Button>
+          <Button variant="outlined" startIcon={<Download size={16} />} disabled={!record || busy} onClick={handleRefresh}>{updating ? 'Обновление...' : 'Обновить'}</Button>
+          <Button variant="contained" color="success" startIcon={<Play size={16} />} sx={{ color: '#fff' }} disabled={!record || busy} onClick={() => handleOp('start')}>{acting === 'start' ? 'Запуск...' : 'Старт'}</Button>
+          <Button variant="contained" color="error" startIcon={<Square size={16} />} sx={{ color: '#fff' }} disabled={!record || busy} onClick={() => handleOp('stop')}>{acting === 'stop' ? 'Остановка...' : 'Стоп'}</Button>
+          <Button variant="outlined" color="error" startIcon={<Trash2 size={16} />} disabled={!record || busy} onClick={handleDelete}>{deleting ? 'Удаление...' : confirmDelete ? 'Точно удалить?' : 'Удалить'}</Button>
+        </Stack>
       </Box>
 
       {updateMsg && <Alert severity={updateMsg.ok ? 'success' : 'error'}>{updateMsg.text}</Alert>}
+      <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => setSyncError(null)}>
+        <Alert severity="error" onClose={() => setSyncError(null)} sx={{ flexGrow: 1 }}>
+          <AlertCircle size={18} sx={{ mr: 1 }} />
+          {syncError}
+        </Alert>
+      </Snackbar>
+      <Snackbar open={!!syncSuccess} autoHideDuration={6000} onClose={() => setSyncSuccess(null)}>
+        <Alert severity="success" onClose={() => setSyncSuccess(null)} sx={{ flexGrow: 1 }}>
+          {syncSuccess}
+        </Alert>
+      </Snackbar>
 
       <Card><Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2 }}><Tab label="Обзор" /><Tab label="Логи" /><Tab label="Настройки" /></Tabs><Divider /></Card>
 
@@ -484,7 +550,17 @@ export default function ApplicationDetails() {
         <Stack spacing={3}>
           {isBuilding && (
             <Card><CardContent>
-              <Typography variant="h6" sx={{ fontWeight: 650, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}><Terminal size={18} /> Сборка образа — живой лог</Typography>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 650, display: 'flex', alignItems: 'center', gap: 1 }}><Terminal size={18} /> Сборка образа — живой лог</Typography>
+                <label sx={{ display: 'flex', alignItems: 'center', gap: 0.5, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={followBuildLog}
+                    onChange={(e) => setFollowBuildLog(e.target.checked)}
+                  />
+                  <Typography variant="caption">Автоскролл</Typography>
+                </label>
+              </Box>
               <Box ref={buildLogBoxRef} sx={{ bgcolor: '#0b1220', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12, p: 2, borderRadius: 2, maxHeight: 380, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                 {buildLog === null ? (buildLogError || 'Подключение к логу сборки...') : buildLog === '' ? 'Пока пусто — первые шаги появятся через пару секунд...' : buildLog}
               </Box>
@@ -527,15 +603,19 @@ export default function ApplicationDetails() {
       {tab === 1 && (
         <Card>
           <CardContent>
-            <Typography variant="h6" sx={{ fontWeight: 650, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}><Terminal size={18} /> Логи приложения</Typography>
+            <Typography variant="h6" sx={{ fontWeight: 650, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Terminal size={18} /> Логи приложения
+              {logsLive && <Chip label="live" size="small" color="success" variant="outlined" />}
+            </Typography>
             {logsLoading && <Typography color="text.secondary">Загрузка логов...</Typography>}
+            {logsError && !logsLoading && <Alert severity="warning" sx={{ mb: 1 }}>{logsError}</Alert>}
             {!logsLoading && logs !== null && (
               <Box sx={{ bgcolor: '#0b1220', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12, p: 2, borderRadius: 2, maxHeight: 380, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                 {logs.length === 0 && '— нет логов —'}
                 {logs.map((line, i) => <div key={i}>{line}</div>)}
               </Box>
             )}
-            {!logsLoading && logs === null && (
+            {!logsLoading && logs === null && !logsError && (
               <Typography color="text.secondary">Контейнер не найден на сервере</Typography>
             )}
             <Button size="small" sx={{ mt: 1 }} startIcon={<Copy size={14} />} onClick={handleCopyLogs}>Копировать логи</Button>

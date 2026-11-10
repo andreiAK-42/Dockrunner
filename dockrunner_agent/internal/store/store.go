@@ -171,7 +171,7 @@ func GetDeployment(db *sql.DB, id string) (*Deployment, error) {
 	var d Deployment
 	var created, updated string
 	err := scanDeployment(db.QueryRow(`SELECT id, app_id, app_name, owner, repo_url, name,
-		image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, branch, created_at, updated_at FROM deployments WHERE id = ?`, id), &d, &created, &updated)
+		image, container, status, ports, volumes, env, cpu_cores, memory_gb, disk_gb, parent_id, parent_app, service, branch, created_at, updated_at FROM deployments WHERE id = ?`, id), &d, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoDeployment
 	}
@@ -184,7 +184,7 @@ func GetDeployment(db *sql.DB, id string) (*Deployment, error) {
 
 func ListDeployments(db *sql.DB) ([]Deployment, error) {
 	rows, err := db.Query(`SELECT id, app_id, app_name, owner, repo_url, name,
-		image, container, status, ports, volumes, env, cpu_cores, memory_gb, parent_id, parent_app, service, branch, created_at, updated_at FROM deployments ORDER BY updated_at DESC`)
+		image, container, status, ports, volumes, env, cpu_cores, memory_gb, disk_gb, parent_id, parent_app, service, branch, created_at, updated_at FROM deployments ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}

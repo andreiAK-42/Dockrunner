@@ -11,6 +11,13 @@ export interface VolumeSpec {
   container_path: string
 }
 
+export interface DetectedPort {
+  container_port: number
+  protocol: string
+  source: string
+  service?: string
+}
+
 export interface CheckStatus {
   id: string
   app_name: string
@@ -20,6 +27,9 @@ export interface CheckStatus {
   detected_dockerfile: boolean
   compose_file: string
   services: string[]
+  branches?: string[]
+  detected_env_vars?: Record<string, string>
+  detected_ports?: DetectedPort[]
   error: string
 }
 
@@ -108,6 +118,9 @@ export function runContainer(payload: {
   network?: string
   working_dir?: string
   user?: string
+  build_mode?: 'dockerfile' | 'compose'
+  branch?: string
+  services?: string[]
 }) {
   return apiRequest<{ data: { deployment_id: string } }>('/api/v1/containers/run', {
     method: 'POST',

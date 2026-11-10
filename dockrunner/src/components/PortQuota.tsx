@@ -48,6 +48,13 @@ export default function PortQuota({ compact = false, sx }: { compact?: boolean; 
   }
   const progressColor = getProgressColor(usagePercent, isFull)
 
+  const cardSx: SxProps<Theme> = {
+    height: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    ...sx,
+  }
+
   if (compact) {
     const statusLabel = isFull ? 'Лимит' : `Свободно ${freeCount}`
     const statusColor = isFull ? 'error' : 'success'
@@ -80,8 +87,8 @@ export default function PortQuota({ compact = false, sx }: { compact?: boolean; 
   const headerChipColor = isFull ? 'error' : 'primary'
 
   return (
-    <Card sx={sx}>
-      <CardContent>
+    <Card sx={cardSx}>
+      <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
           <Typography variant="h6" sx={{ fontWeight: 650, display: 'flex', alignItems: 'center', gap: 1 }}><Globe size={18} /> Порты пользователя</Typography>
           <Chip label={headerChipLabel} color={headerChipColor} size="small" sx={{ margin: '10px' }} />

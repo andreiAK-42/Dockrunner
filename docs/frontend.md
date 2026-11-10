@@ -38,6 +38,7 @@ npm run dev
 | `auth.ts`, `users.ts`, `nodes.ts` | совпадают с реализованными роутами бэкенда |
 | `applications.ts`, `containers.ts`, `domains.ts`, `envConfigs.ts`, `volumes.ts`, `notifications.ts`, `overview.ts` | контракты под будущие модули бэкенда |
 | `containers.ts` | Запуск в стиле docker run: check → опрос → run, refresh |
+| `realtime.ts` | Один WebSocket на сессию (`/api/v1/ws`): события контейнеров, проверок и заявок, авто-реконнект; `src/hooks/useRealtime.ts` — подписка из компонентов |
 | `files.ts`, `storage.ts` | Файлы пользователя на воркерах; занятое место |
 | `databases.ts` | мок-провайдер до появления бэкенд-модуля |
 

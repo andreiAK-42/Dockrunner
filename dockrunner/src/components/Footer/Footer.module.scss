@@ -48,26 +48,4 @@
     border-radius: 999px;
     white-space: nowrap;
   }
-
-  &__links {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  &__dot {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--custom-divider);
-    flex-shrink: 0;
-  }
-
-  &__copy {
-    font-size: 0.75rem;
-    color: var(--custom-text-secondary);
-    white-space: nowrap;
-  }
 }

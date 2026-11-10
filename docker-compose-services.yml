@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: dockrunner
+      POSTGRES_PASSWORD: md51d42fb006664faf08d35d18490dc723e
+      POSTGRES_DB: dockrunner
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: dockrunner
+      RABBITMQ_DEFAULT_PASS: md5adaa207dd5294739f8aab13489ffa490
+    ports:
+      - "5672:5672"   # Порт для подключения приложений
+      - "15672:15672" # Панель управления (Management UI)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    labels:
+      com.datadoghq.ad.logs: '[{"source": "rabbitmq", "service": "rabbitmq"}]'
+
+  victorialogs:
+    image: docker.io/victoriametrics/victoria-logs:${VL_VERSION:-v1.53.0}
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=${RETENTION:-30d}
+    ports:
+      - "127.0.0.1:9428:9428"
+    volumes:
+      - vl-data:/victoria-logs-data
+
+  victoria-metrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoria-metrics
+    ports:
+      - "8428:8428"
+    volumes:
+      - vm-data:/victoria-metrics-data
+    command:
+      - "-storageDataPath=/victoria-metrics-data"
+      - "-retentionPeriod=1m"
+      - "-selfScrapeInterval=10s"
+    restart: always
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - victorialogs
+    environment:
+      DOMAIN: pi.kemsu.ru
+      TOKEN: 
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+  
+
+  
+
+volumes:
+  pgdata:
+  rabbitmq_data:
+  influxdb_data:
+  vm-data:

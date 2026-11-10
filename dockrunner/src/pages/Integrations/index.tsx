@@ -214,7 +214,6 @@ export default function Integrations() {
         <CardContent>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Базы данных: {usageGB.toFixed(1)} / {limitGB.toFixed(1)} ГБ</Typography>
-            <Chip label={limitReached ? 'Лимит' : `Свободно ${(limitGB - usageGB).toFixed(1)} ГБ`} color={limitReached ? 'error' : 'success'} size="small" />
           </Stack>
           <LinearProgress variant="determinate" value={usagePercent} color={limitReached ? 'error' : 'primary'} sx={{ mt: 1.5, height: 8, borderRadius: 999 }} />
           {limitReached && <Alert severity="warning" sx={{ mt: 1.5 }}>Лимит места тарифа исчерпан — новые базы создать нельзя.</Alert>}

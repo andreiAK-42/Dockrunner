@@ -255,6 +255,7 @@ type RunRequest struct {
 	DurationHours float64           `json:"duration_hours" example:"10"`
 	Services      []string          `json:"services" example:"front,back"`
 	BuildMode     string            `json:"build_mode" example:"compose"`
+	Branch        string            `json:"branch" example:"main"`
 }
 
 func applyDefaultsAndValidate(req *RunRequest) error {
@@ -316,6 +317,7 @@ func (h *Handler) Run(c *gin.Context) {
 		DurationHours: req.DurationHours,
 		Services:      req.Services,
 		BuildMode:     req.BuildMode,
+		Branch:        req.Branch,
 	})
 	if err != nil {
 		h.logger.Warn("run failed", zap.Error(err))
@@ -511,6 +513,46 @@ func (h *Handler) BuildLogStream(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": msg})
 		return
 	}
+	h.proxyAgentStream(c, wsURL, "build log stream")
+}
+
+// ContainerLogStream godoc
+// @Summary Живые логи контейнера по WebSocket (прокси на воркер)
+// @Description Токен — в ?token=. Сначала история, затем живые строки.
+// @Tags containers
+// @Produce json
+// @Param id path string true "ID контейнера"
+// @Param token query string true "JWT пользователя"
+// @Success 101 "Переключение на WebSocket"
+// @Failure 401 {object} response.Error
+// @Failure 404 {object} response.Error
+// @Router /api/v1/containers/{id}/logs/stream [get]
+func (h *Handler) ContainerLogStream(c *gin.Context) {
+	claims, ok := h.queryToken(c)
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+		return
+	}
+	rec, err := h.service.GetRecord(c.Request.Context(), claims.Login, c.Param("id"))
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "application not found"})
+		return
+	}
+	wsURL, err := h.service.AgentContainerLogStreamURL(c.Request.Context(), rec.NodeID, rec.ID)
+	if err != nil {
+		msg := "logs unavailable"
+		if errors.Is(err, agents.ErrNoAPIURL) {
+			msg = "воркер не сообщил свой адрес API — задайте AGENT_PUBLIC_URL у агента"
+		}
+		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": msg})
+		return
+	}
+	h.proxyAgentStream(c, wsURL, "container log stream")
+}
+
+// proxyAgentStream pipes a worker WebSocket to the browser and keeps the
+// client-to-agent direction alive so close frames are propagated.
+func (h *Handler) proxyAgentStream(c *gin.Context, wsURL, label string) {
 	clientConn, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
 	if err != nil {
 		return
@@ -521,7 +563,7 @@ func (h *Handler) BuildLogStream(c *gin.Context) {
 	defer cancel()
 	agentConn, _, err := websocket.Dial(dialCtx, wsURL, nil)
 	if err != nil {
-		h.logger.Warn("build log stream dial failed", zap.Error(err))
+		h.logger.Warn(label+" dial failed", zap.Error(err))
 		_ = clientConn.Close(websocket.StatusInternalError, "agent unreachable")
 		return
 	}

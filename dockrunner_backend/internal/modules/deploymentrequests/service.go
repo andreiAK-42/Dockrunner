@@ -12,6 +12,7 @@ import (
 	"dockrunner_backend/internal/modules/balances"
 	"dockrunner_backend/internal/modules/containers"
 	"dockrunner_backend/internal/modules/pricing"
+	"dockrunner_backend/internal/realtime"
 )
 
 var (
@@ -25,10 +26,17 @@ type Service struct {
 	containers  *containers.Service
 	balances    *balances.Service
 	logger      *zap.Logger
+	hub         *realtime.Hub
 }
 
-func NewService(repo *Repository, pricingRepo *pricing.Repository, containers *containers.Service, balances *balances.Service, logger *zap.Logger) *Service {
-	return &Service{repo: repo, pricingRepo: pricingRepo, containers: containers, balances: balances, logger: logger}
+func NewService(repo *Repository, pricingRepo *pricing.Repository, containers *containers.Service, balances *balances.Service, logger *zap.Logger, hub *realtime.Hub) *Service {
+	return &Service{repo: repo, pricingRepo: pricingRepo, containers: containers, balances: balances, logger: logger, hub: hub}
+}
+
+// publish notifies the request owner and administrators about a new or
+// changed deployment request.
+func (s *Service) publish(eventType string, req *Request) {
+	s.hub.Emit(eventType, realtime.TopicDeploymentRequests, req.OwnerLogin, req)
 }
 
 // ServiceCount — число контейнеров заявки (1 для Dockerfile/образа).
@@ -46,7 +54,11 @@ func (s *Service) Create(ctx context.Context, req *Request) error {
 	if req.RepoURL != "" && req.Branch == "" {
 		return errors.New("branch is required when repo_url is set")
 	}
-	return s.repo.Create(ctx, req)
+	if err := s.repo.Create(ctx, req); err != nil {
+		return err
+	}
+	s.publish("deployment_request.created", req)
+	return nil
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Request, error) {
@@ -132,6 +144,10 @@ func (s *Service) Approve(ctx context.Context, id uuid.UUID, adminLogin string) 
 	if err := s.repo.UpdateStatus(ctx, id, "approved", "", adminLogin, deploymentID); err != nil {
 		return "", err
 	}
+	req.Status = "approved"
+	req.DecidedBy = adminLogin
+	req.DeploymentID = deploymentID
+	s.publish("deployment_request.updated", req)
 	return deploymentID, nil
 }
 
@@ -180,6 +196,10 @@ func (s *Service) approveUpdate(ctx context.Context, req *Request, adminLogin st
 	if err := s.repo.UpdateStatus(ctx, req.ID, "approved", "", adminLogin, req.ExistingDeploymentID); err != nil {
 		return "", err
 	}
+	req.Status = "approved"
+	req.DecidedBy = adminLogin
+	req.DeploymentID = req.ExistingDeploymentID
+	s.publish("deployment_request.updated", req)
 	return req.ExistingDeploymentID, nil
 }
 
@@ -191,14 +211,29 @@ func (s *Service) Reject(ctx context.Context, id uuid.UUID, adminLogin, comment 
 	if req.Status != "pending" {
 		return ErrInvalidState
 	}
-	return s.repo.UpdateStatus(ctx, id, "rejected", comment, adminLogin, "")
+	if err := s.repo.UpdateStatus(ctx, id, "rejected", comment, adminLogin, ""); err != nil {
+		return err
+	}
+	req.Status = "rejected"
+	req.Comment = comment
+	req.DecidedBy = adminLogin
+	s.publish("deployment_request.updated", req)
+	return nil
 }
 
 func (s *Service) SetPrice(ctx context.Context, id uuid.UUID, price float64) error {
 	if price < 0 {
 		return errors.New("price must not be negative")
 	}
-	return s.repo.UpdatePrice(ctx, id, price)
+	if err := s.repo.UpdatePrice(ctx, id, price); err != nil {
+		return err
+	}
+	req, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	s.publish("deployment_request.updated", req)
+	return nil
 }
 
 func CalcPriceStatic(rates pricing.Rates, cpuCores, memoryGB, diskGB, hours float64) float64 {

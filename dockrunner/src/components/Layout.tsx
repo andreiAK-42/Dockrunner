@@ -16,6 +16,7 @@ import {
   IconButton,
   Divider,
   Breadcrumbs,
+  Collapse,
 } from '@mui/material'
 import {
   LayoutDashboard,
@@ -33,53 +34,35 @@ import {
   ShieldCheck,
   FolderOpen,
   BookOpen,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { APP_NAME } from '../config/appConfig'
+import { NAVIGATION } from '../config/navigation'
+import {
+  filterVisible,
+  getBreadcrumbs,
+  getPageTitle,
+  getVisibleMenuItems,
+  isNavActive,
+  type NavItem,
+} from '../utils/navigation'
 
 const DRAWER_WIDTH = 240
 
-const NAVIGATION = [
-  { text: 'Статистика', icon: <LayoutDashboard size={20} />, path: '/dashboard' },
-  { text: 'Приложения', icon: <BoxIcon size={20} />, path: '/applications' },
-  { text: 'Конфигурации .env', icon: <FileCode2 size={20} />, path: '/env-configs' },
-  { text: 'Интеграции', icon: <Puzzle size={20} />, path: '/integrations' },
-  { text: 'Файлы', icon: <FolderOpen size={20} />, path: '/files' },
-  { text: 'Документация', icon: <BookOpen size={20} />, path: '/docs' },
-  { text: 'Персонализация', icon: <Palette size={20} />, path: '/appearance' },
-  { text: 'Профиль', icon: <User size={20} />, path: '/profile' },
-  { text: 'Администрирование', icon: <ShieldCheck size={20} />, path: '/admin' },
-]
-
-// Пункты, скрытые у админа: статистика, приложения и env уже есть в панели
-// администрирования, домены удалены из продукта.
-const ADMIN_HIDDEN_PATHS = ['/dashboard', '/applications', '/env-configs']
-
-function isNavActive(currentPath: string, itemPath: string) {
-  if (currentPath === itemPath) return true
-  return currentPath.startsWith(itemPath + '/')
-}
-
-function getPageTitle(pathname: string) {
-  const route = NAVIGATION.find((item) => item.path === pathname)
-  if (route) return route.text
-  if (pathname.startsWith('/docs')) return 'Документация'
-  if (pathname.startsWith('/applications/new')) return 'Создание приложения'
-  if (pathname.startsWith('/applications/')) return 'Детали приложения'
-  if (pathname.startsWith('/containers/')) return 'Детали контейнера'
-  if (pathname.startsWith('/nodes/')) return 'Детали узла'
-  if (pathname.startsWith('/login')) return 'Вход'
-  if (pathname.startsWith('/volumes')) return 'Тома'
-  return 'Обзор'
-}
-
 export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const navigate = useNavigate()
   const location = useLocation()
   const { config } = useCustomTheme()
   const { logout, isAuthenticated, user } = useAuth()
   const hasBg = !!config.backgroundImage
-  const showAdmin = user?.role === 'admin'
+  const userRole = user?.role
+
+  const visibleNavigation = getVisibleMenuItems(NAVIGATION, userRole)
+  const breadcrumbs = getBreadcrumbs(location.pathname)
+  const pageTitle = getPageTitle(location.pathname)
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen)
@@ -90,16 +73,128 @@ export default function Layout() {
     setMobileOpen(false)
   }
 
-  const visibleNavigation = NAVIGATION.filter((item) => {
-    const isAdminRoute = item.path === '/admin'
-    if (isAdminRoute && !showAdmin) {
-      return false
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const renderNavItem = (item: NavItem, depth = 0) => {
+    const active = isNavActive(location.pathname, item.path)
+    const hasChildren = item.children && item.children.length > 0
+    const isExpanded = expandedGroups[item.key]
+
+    // Group header (секция без линка)
+    if (item.isGroupHeader) {
+      return (
+        <Box key={item.key} sx={{ px: 2, py: 0.5, mt: depth === 0 ? 1 : 0.5 }}>
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.secondary',
+              fontWeight: 600,
+              letterSpacing: 0.5,
+              textTransform: 'uppercase',
+              fontSize: '0.7rem',
+            }}
+          >
+            {item.label}
+          </Typography>
+        </Box>
+      )
     }
-    if (showAdmin && ADMIN_HIDDEN_PATHS.includes(item.path)) {
-      return false
+
+    // Группа с вложенными элементами
+    if (hasChildren) {
+      return (
+        <Box key={item.key} sx={{ mb: 0.5 }}>
+          <ListItemButton
+            onClick={() => toggleGroup(item.key)}
+            sx={{
+              borderRadius: 1.5,
+              py: 1,
+              pl: 2 + depth * 2,
+              pr: 2,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              bgcolor: active ? 'primary.main' : 'transparent',
+              color: active ? 'primary.contrastText' : 'text.primary',
+              '&:hover': {
+                bgcolor: active ? 'primary.dark' : 'action.hover',
+              },
+              '& .MuiListItemIcon-root': {
+                color: active ? 'primary.contrastText' : 'text.secondary',
+                minWidth: 40,
+              },
+            }}
+          >
+            <ListItemIcon>{item.icon}</ListItemIcon>
+            <ListItemText
+              primary={
+                <Typography
+                  sx={{
+                    fontSize: '0.875rem',
+                    fontWeight: active ? 600 : 500,
+                    flexGrow: 1,
+                  }}
+                >
+                  {item.label}
+                </Typography>
+              }
+            />
+            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </ListItemButton>
+          <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+            <Box sx={{ pl: depth === 0 ? 2 : 4 }}>
+              {item.children!.map(child => renderNavItem(child, depth + 1))}
+            </Box>
+          </Collapse>
+        </Box>
+      )
     }
-    return true
-  })
+
+    // Обычный пункт меню
+    return (
+      <ListItem key={item.key} disablePadding sx={{ mb: 0.5 }}>
+        <ListItemButton
+          selected={active}
+          onClick={() => item.path && handleNavigate(item.path)}
+          sx={{
+            borderRadius: 1.5,
+            py: 1,
+            pl: 2 + depth * 2,
+            pr: 2,
+            '&.Mui-selected': {
+              bgcolor: 'primary.main',
+              color: 'primary.contrastText',
+              '&:hover': { bgcolor: 'primary.dark' },
+              '& .MuiListItemIcon-root': { color: 'primary.contrastText' },
+            },
+          }}
+        >
+          <ListItemIcon
+            sx={{
+              minWidth: 40,
+              color: active ? 'inherit' : 'text.secondary',
+            }}
+          >
+            {item.icon}
+          </ListItemIcon>
+          <ListItemText
+            primary={
+              <Typography
+                sx={{
+                  fontSize: '0.875rem',
+                  fontWeight: active ? 600 : 500,
+                }}
+              >
+                {item.label}
+              </Typography>
+            }
+          />
+        </ListItemButton>
+      </ListItem>
+    )
+  }
 
   const drawer = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'background.paper' }}>
@@ -124,41 +219,8 @@ export default function Layout() {
       </Toolbar>
       <Divider sx={{ mb: 1 }} />
 
-      <Box sx={{ px: 2, py: 1 }}>
-        <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' }}>
-          Меню
-        </Typography>
-      </Box>
-
       <List sx={{ px: 1.5, flexGrow: 1, overflowY: 'auto' }}>
-        {visibleNavigation.map((item) => {
-          const active = isNavActive(location.pathname, item.path)
-          const itemFontWeight = active ? 600 : 500
-          const iconColor = active ? 'inherit' : 'text.secondary'
-          return (
-            <ListItem key={item.text} disablePadding sx={{ mb: 0.5 }}>
-              <ListItemButton
-                selected={active}
-                onClick={() => handleNavigate(item.path)}
-                sx={{
-                  borderRadius: 1.5,
-                  py: 1,
-                  '&.Mui-selected': {
-                    bgcolor: 'primary.main',
-                    color: 'primary.contrastText',
-                    '&:hover': { bgcolor: 'primary.dark' },
-                    '& .MuiListItemIcon-root': { color: 'primary.contrastText' },
-                  },
-                }}
-              >
-                <ListItemIcon sx={{ minWidth: 40, color: iconColor }}>{item.icon}</ListItemIcon>
-                <ListItemText
-                  primary={<Typography sx={{ fontSize: '0.875rem', fontWeight: itemFontWeight }}>{item.text}</Typography>}
-                />
-              </ListItemButton>
-            </ListItem>
-          )
-        })}
+        {visibleNavigation.map(item => renderNavItem(item))}
       </List>
 
       <Box sx={{ px: 1.5, pb: 1 }}>
@@ -219,9 +281,16 @@ export default function Layout() {
               <Typography color="text.secondary" variant="body2" sx={{ fontWeight: 500 }}>
                 {APP_NAME}
               </Typography>
-              <Typography color="text.primary" variant="body2" sx={{ fontWeight: 600 }}>
-                {getPageTitle(location.pathname)}
-              </Typography>
+              {breadcrumbs.map((item, index) => (
+                <Typography
+                  key={item.key}
+                  color={index === breadcrumbs.length - 1 ? 'text.primary' : 'text.secondary'}
+                  variant="body2"
+                  sx={{ fontWeight: index === breadcrumbs.length - 1 ? 600 : 500 }}
+                >
+                  {item.breadcrumbLabel || item.label}
+                </Typography>
+              ))}
             </Breadcrumbs>
           </Box>
         </Toolbar>
@@ -233,7 +302,10 @@ export default function Layout() {
           open={mobileOpen}
           onClose={handleDrawerToggle}
           ModalProps={{ keepMounted: true }}
-          sx={{ display: { xs: 'block', md: 'none' }, '& .MuiDrawer-paper': { boxSizing: 'border-box', width: DRAWER_WIDTH, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 } }}
+          sx={{
+            display: { xs: 'block', md: 'none' },
+            '& .MuiDrawer-paper': { boxSizing: 'border-box', width: DRAWER_WIDTH, borderTopLeftRadius: 0, borderBottomLeftRadius: 0 },
+          }}
         >
           {drawer}
         </Drawer>

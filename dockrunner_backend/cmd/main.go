@@ -24,6 +24,7 @@ import (
 	"dockrunner_backend/internal/modules/users"
 	"dockrunner_backend/internal/modules/volumes"
 	"dockrunner_backend/internal/oplock"
+	"dockrunner_backend/internal/realtime"
 	"dockrunner_backend/internal/router"
 	"dockrunner_backend/pkg/database/influxdb"
 	"dockrunner_backend/pkg/database/postgre"
@@ -83,7 +84,8 @@ func main() {
 		defer func() { _ = queueClient.Close() }()
 	}
 
-	shared := buildSharedServices(ctx, cfg, pg, queueClient, ops, zlog, important)
+	hub := realtime.NewHub(zlog)
+	shared := buildSharedServices(ctx, cfg, pg, queueClient, ops, hub, zlog, important)
 
 	engine := router.New(router.Dependencies{
 		Config:            cfg,
@@ -92,6 +94,7 @@ func main() {
 		Influx:            influxDB,
 		Queue:             queueClient,
 		OpTracker:         ops,
+		Realtime:          hub,
 		AdminService:              shared.admin,
 		VolumesService:            shared.volumes,
 		ContainersService:         shared.containers,
@@ -192,7 +195,7 @@ type sharedServices struct {
 // в карту, которую никто не опрашивает).
 // Без postgres+rabbitmq возвращает пустой набор — роутер поднимет локальные
 // инстансы (dev-режим без результатов задач).
-func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Pool, queueClient *queue.Client, ops *oplock.Tracker, zlog *zap.Logger, important *zap.Logger) sharedServices {
+func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Pool, queueClient *queue.Client, ops *oplock.Tracker, hub *realtime.Hub, zlog *zap.Logger, important *zap.Logger) sharedServices {
 	if queueClient == nil {
 		return sharedServices{}
 	}
@@ -209,7 +212,7 @@ func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Po
 	volumesRepo := volumes.NewRepository(pg, zlog)
 	volumesService := volumes.NewService(volumesRepo, queueClient, zlog)
 
-	containersService := containers.NewService(adminRepo, agentsRepo, volumesService, cfg.AgentToken, queueClient, zlog, ops, containers.PortsPolicy{Min: cfg.PortsMin, Max: cfg.PortsMax})
+	containersService := containers.NewService(adminRepo, agentsRepo, volumesService, cfg.AgentToken, queueClient, zlog, ops, containers.PortsPolicy{Min: cfg.PortsMin, Max: cfg.PortsMax}, hub)
 
 	// Start disk usage monitor
 	containersService.StartDiskMonitor(ctx, containers.DefaultDiskMonitorConfig())
@@ -226,9 +229,9 @@ func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Po
 	balancesService := balances.NewService(balancesRepo, zlog)
 
 	// Deployment Requests service (needs pricing, containers to launch, balances to charge)
-	deploymentRequestsService := deploymentrequests.NewService(deploymentRequestsRepo, pricingRepo, containersService, balancesService, zlog)
+	deploymentRequestsService := deploymentrequests.NewService(deploymentRequestsRepo, pricingRepo, containersService, balancesService, zlog, hub)
 
-	if err := consumer.StartEvents(ctx, queueClient, adminService, containersService, zlog); err != nil {
+	if err := consumer.StartEvents(ctx, queueClient, adminService, containersService, hub, zlog); err != nil {
 		zlog.Warn("events consumer failed", zap.Error(err))
 		return sharedServices{}
 	}

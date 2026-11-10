@@ -19,6 +19,7 @@ import (
 	"dockrunner_backend/internal/modules/agents"
 	"dockrunner_backend/internal/modules/volumes"
 	"dockrunner_backend/internal/oplock"
+	"dockrunner_backend/internal/realtime"
 	"dockrunner_backend/pkg/queue"
 )
 
@@ -29,16 +30,26 @@ var (
 	ErrNodeOffline = errors.New("узел не в сети — нет свежего heartbeat")
 )
 
+type DetectedPort struct {
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol"`
+	Source        string `json:"source"` // "dockerfile" or "compose"
+	Service       string `json:"service,omitempty"` // service name for compose
+}
+
 type Check struct {
-	ID                 string   `json:"id"`
-	AppName            string   `json:"app_name"`
-	RepoURL            string   `json:"repo_url"`
-	NodeID             string   `json:"node_id"`
-	Status             string   `json:"status"`
-	DetectedDockerfile bool     `json:"detected_dockerfile"`
-	ComposeFile        string   `json:"compose_file"`
-	Services           []string `json:"services"`
-	Error              string   `json:"error"`
+	ID                 string         `json:"id"`
+	AppName            string         `json:"app_name"`
+	RepoURL            string         `json:"repo_url"`
+	NodeID             string         `json:"node_id"`
+	Status             string         `json:"status"`
+	DetectedDockerfile bool           `json:"detected_dockerfile"`
+	ComposeFile        string         `json:"compose_file"`
+	Services           []string       `json:"services"`
+	Branches           []string       `json:"branches,omitempty"`
+	DetectedEnvVars    map[string]string `json:"detected_env_vars,omitempty"`
+	DetectedPorts      []DetectedPort `json:"detected_ports,omitempty"`
+	Error              string         `json:"error"`
 	owner              string
 	expires            time.Time
 }
@@ -84,9 +95,10 @@ type Service struct {
 	agentToken string
 	queue      *queue.Client
 	logger     *zap.Logger
+	hub        *realtime.Hub
 }
 
-func NewService(store ContainerStore, agents *agents.Repository, vols *volumes.Service, agentToken string, queue *queue.Client, logger *zap.Logger, ops *oplock.Tracker, ports PortsPolicy) *Service {
+func NewService(store ContainerStore, agents *agents.Repository, vols *volumes.Service, agentToken string, queue *queue.Client, logger *zap.Logger, ops *oplock.Tracker, ports PortsPolicy, hub *realtime.Hub) *Service {
 	if ops == nil {
 		ops = &oplock.Tracker{}
 	}
@@ -101,7 +113,18 @@ func NewService(store ContainerStore, agents *agents.Repository, vols *volumes.S
 		agentToken: agentToken,
 		queue:      queue,
 		logger:     logger,
+		hub:        hub,
 	}
+}
+
+// publishContainer pushes a container state change to its owner and admins.
+func (s *Service) publishContainer(owner string, rec admin.ContainerRecord) {
+	s.hub.Emit("container.updated", realtime.TopicContainers, owner, rec)
+}
+
+// publishCheck pushes a repository check result to the owner (and admins).
+func (s *Service) publishCheck(owner string, check *Check) {
+	s.hub.Emit("check.updated", realtime.TopicChecks, owner, check)
 }
 
 // ReleaseOp frees the operation lock for owner/app. Called when a terminal
@@ -328,6 +351,7 @@ func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec 
 	if err := s.store.UpsertContainer(ctx, *rec); err != nil {
 		s.logger.Warn("container recreated but central record update failed", zap.String("container", id), zap.Error(err))
 	}
+	s.publishContainer(rec.OwnerLogin, *rec)
 	return responseBody, nil
 }
 
@@ -359,6 +383,34 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 				}
 			}
 		}
+	}
+
+	// If both attempts failed, check if it's a 404 (container not found on agent)
+	// In that case, update the DB status to "stopped" and return a spec from the DB record
+	errStr := err.Error()
+	if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") || strings.Contains(errStr, "not found") {
+		// Container doesn't exist on agent anymore - update DB status
+		_ = s.store.SetContainerStatus(ctx, id, "stopped")
+		rec.Status = "stopped"
+		s.publishContainer(rec.OwnerLogin, *rec)
+
+		// Build spec response from DB record
+		spec := map[string]any{
+			"id":             rec.ID,
+			"name":           rec.AppName,
+			"image":          rec.Image,
+			"status":         rec.Status,
+			"ports":          rec.Ports,
+			"volumes":        rec.Volumes,
+			"env":            rec.Env,
+			"entrypoint":     []string{},
+			"cmd":            []string{},
+			"restart_policy": rec.RestartPolicy,
+			"network":        "",
+			"working_dir":    "",
+			"user":           "",
+		}
+		return json.Marshal(spec)
 	}
 
 	return nil, err
@@ -405,6 +457,15 @@ func (s *Service) ContainerStats(ctx context.Context, owner, id string) (*Contai
 				}
 			}
 		}
+	}
+
+	// If both attempts failed, check if it's a 404 (container not found on agent)
+	// In that case, update the DB status to "stopped" and return zeros (container is stopped)
+	errStr := err.Error()
+	if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") || strings.Contains(errStr, "not found") {
+		// Container doesn't exist on agent anymore - update DB status
+		_ = s.store.SetContainerStatus(ctx, id, "stopped")
+		return &ContainerStats{CPUPercent: 0, MemMB: 0}, nil
 	}
 
 	return nil, err
@@ -477,6 +538,15 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 		}
 	}
 
+	// If both attempts failed, check if it's a 404 (container not found on agent)
+	// In that case, update the DB status to "stopped" and return empty logs (container is stopped)
+	errStr := err.Error()
+	if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") || strings.Contains(errStr, "not found") {
+		// Container doesn't exist on agent anymore - update DB status
+		_ = s.store.SetContainerStatus(ctx, id, "stopped")
+		return "Контейнер не найден на узле (возможно, был удален). Статус обновлен на 'stopped'.", nil
+	}
+
 	return "", err
 }
 
@@ -526,6 +596,7 @@ func (s *Service) StartCheck(ctx context.Context, owner, appName, repoURL, nodeI
 		return nil, err
 	}
 	s.logger.Info("prepare task published", zap.String("node", nodeID), zap.String("check", check.ID))
+	s.publishCheck(owner, check)
 	return check, nil
 }
 
@@ -562,7 +633,7 @@ func (s *Service) GetCheck(id string) (*Check, error) {
 	return check, nil
 }
 
-func (s *Service) ResolveCheck(deploymentID string, ok bool, dockerfile bool, composeFile string, services []string, errMsg string) {
+func (s *Service) ResolveCheck(deploymentID string, ok bool, dockerfile bool, composeFile string, services []string, branches []string, detectedEnvVars map[string]string, detectedPorts []DetectedPort, errMsg string) {
 	s.mu.Lock()
 	check, found := s.checks[deploymentID]
 	if !found {
@@ -574,6 +645,9 @@ func (s *Service) ResolveCheck(deploymentID string, ok bool, dockerfile bool, co
 		check.DetectedDockerfile = dockerfile
 		check.ComposeFile = composeFile
 		check.Services = services
+		check.Branches = branches
+		check.DetectedEnvVars = detectedEnvVars
+		check.DetectedPorts = detectedPorts
 	} else {
 		check.Status = "failed"
 		check.Error = errMsg
@@ -581,6 +655,7 @@ func (s *Service) ResolveCheck(deploymentID string, ok bool, dockerfile bool, co
 	owner, appName := check.owner, check.AppName
 	s.mu.Unlock()
 	s.ops.Release(owner, appName)
+	s.publishCheck(owner, check)
 }
 
 func (s *Service) prune() {
@@ -717,7 +792,9 @@ func (s *Service) Run(ctx context.Context, owner string, in RunInput) (string, e
 	for _, rec := range records {
 		if err := s.store.UpsertContainer(ctx, rec); err != nil {
 			s.logger.Warn("run record not saved", zap.String("deployment", rec.ID), zap.Error(err))
+			continue
 		}
+		s.publishContainer(owner, rec)
 	}
 	named := make([]volumes.NamedVolume, 0, len(in.Volumes))
 	for _, v := range in.Volumes {
@@ -752,6 +829,8 @@ func (s *Service) RefreshByApp(ctx context.Context, owner, appName string) (stri
 		s.ops.Release(owner, appName)
 		return "", err
 	}
+	rec.Status = "building"
+	s.publishContainer(owner, *rec)
 	return rec.ID, nil
 }
 
@@ -853,6 +932,22 @@ func (s *Service) AgentBuildLogStreamURL(ctx context.Context, nodeID, deployment
 		ws = "ws://" + strings.TrimPrefix(ws, "http://")
 	}
 	return trimSlash(ws) + "/deployments/" + deploymentID + "/build-log/stream?token=" + url.QueryEscape(s.agentToken), nil
+}
+
+// AgentContainerLogStreamURL builds the worker WebSocket URL for live logs.
+func (s *Service) AgentContainerLogStreamURL(ctx context.Context, nodeID, deploymentID string) (string, error) {
+	apiURL, err := s.agents.AgentApiURL(ctx, nodeID)
+	if err != nil {
+		return "", err
+	}
+	ws := apiURL
+	switch {
+	case strings.HasPrefix(ws, "https://"):
+		ws = "wss://" + strings.TrimPrefix(ws, "https://")
+	case strings.HasPrefix(ws, "http://"):
+		ws = "ws://" + strings.TrimPrefix(ws, "http://")
+	}
+	return trimSlash(ws) + "/containers/" + url.PathEscape(deploymentID) + "/logs/stream?token=" + url.QueryEscape(s.agentToken) + "&history=0", nil
 }
 
 // AdminStopContainer stops a container by deployment ID (admin level, no owner check).

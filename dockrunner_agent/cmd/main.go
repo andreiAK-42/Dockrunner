@@ -44,7 +44,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if loc := geo.Detect(ctx, logger); loc.Lat != 0 || loc.Lng != 0 || loc.City != "" || loc.IP != "" {
+	// Use AgentIP from config if specified, otherwise auto-detect
+	if cfg.AgentIP != "" {
+		cfg.IP = cfg.AgentIP
+		logger.Info("using agent IP from config", "ip", cfg.IP)
+	} else if loc := geo.Detect(ctx, logger); loc.Lat != 0 || loc.Lng != 0 || loc.City != "" || loc.IP != "" {
 		cfg.City, cfg.Lat, cfg.Lng, cfg.IP = loc.City, loc.Lat, loc.Lng, loc.IP
 		logger.Info("geo detected", "city", loc.City, "lat", loc.Lat, "lng", loc.Lng, "ip", loc.IP)
 	}

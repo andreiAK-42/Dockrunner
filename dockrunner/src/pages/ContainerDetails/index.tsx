@@ -1,16 +1,22 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Box, Button, Card, CardContent, Stack, Typography, Chip, Tabs, Tab, Divider, IconButton, TextField, MenuItem, Select, FormControl, InputLabel, Alert } from '@mui/material'
-import { ArrowLeft, Play, Square, RotateCcw, Terminal, Copy, Download, Trash2, HardDrive, Globe, Box as BoxIcon, ExternalLink } from 'lucide-react'
-import { fetchMine, fetchContainerSpec, fetchContainerLogs, startContainer, stopContainer, removeContainer, fetchBuildLog, applyDockerCommand, requestContainerUpdate, type MineContainer, type ContainerSpec } from '../../api/containers'
+import { Box, Button, Card, CardContent, Stack, Typography, Chip, Tabs, Tab, Divider, IconButton, TextField, MenuItem, Select, FormControl, InputLabel, Alert, Snackbar } from '@mui/material'
+import { ArrowLeft, Play, Square, RotateCcw, Terminal, Copy, Download, Trash2, HardDrive, Globe, Box as BoxIcon, ExternalLink, RefreshCw, AlertCircle } from 'lucide-react'
+import { fetchMine, fetchContainerSpec, startContainer, stopContainer, removeContainer, fetchBuildLog, applyDockerCommand, requestContainerUpdate, refreshContainerByApp, type ContainerSpec } from '../../api/containers'
 import { copyText } from '../../utils/clipboard'
 import { useEnvConfigs } from '../../hooks/useEnvConfigs'
+import { useRealtimeStatus } from '../../hooks/useRealtime'
+import { useContainerLogs } from '../../hooks/useContainerLogs'
+import { useAppDispatch, useAppSelector } from '../../store/hooks'
+import { containerStatusPatched, fetchMineContainers } from '../../store/slices/containersSlice'
 import { toDockerEnvArgs } from '../../types/envConfig'
 import type { EnvConfig } from '../../types/envConfig'
 import { IN_PROGRESS_STATUSES } from '../../utils/status'
 import styles from './ContainerDetails.module.scss'
 
 const DEFAULT_NEW_VOLUME_SIZE_GB = 5
+const MAX_BUILD_LOG_LINES = 2000
+const MAX_LOG_LINES = 1000
 
 function filterLogsBySearch(logs: string[], search: string): string[] {
   const query = search.trim().toLowerCase()
@@ -75,7 +81,11 @@ export default function ContainerDetails() {
   const { id, containerId } = useParams()
   const realId = containerId || id
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const { configs } = useEnvConfigs()
+  const record = useAppSelector(
+    (state) => state.containers.mine.find((container) => container.id === realId) || null,
+  )
 
   const [tab, setTab] = useState(0)
   const [follow, setFollow] = useState(true)
@@ -86,18 +96,65 @@ export default function ContainerDetails() {
   const [volumesFor, setVolumesFor] = useState<string | undefined>(undefined)
   const [newVolName, setNewVolName] = useState('')
   const [newVolPath, setNewVolPath] = useState('')
-  const [record, setRecord] = useState<MineContainer | null>(null)
   const [spec, setSpec] = useState<ContainerSpec | null>(null)
-  const [logs, setLogs] = useState<string[] | null>(null)
-  const [logsLoadedFor, setLogsLoadedFor] = useState('')
   const [buildLog, setBuildLog] = useState<string | null>(null)
   const [buildLogError, setBuildLogError] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [applyingCommand, setApplyingCommand] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncSuccess, setSyncSuccess] = useState<string | null>(null)
   const buildLogBoxRef = useRef<HTMLDivElement | null>(null)
   const cancelWaitRef = useRef(false)
+  const connected = useRealtimeStatus()
+
+  // Verify actual container status by fetching spec
+  const verifyContainerStatus = useCallback(async () => {
+    setSyncing(true)
+    setSyncError(null)
+    setSyncSuccess(null)
+
+    try {
+      // Fetch fresh record from backend to avoid stale closure
+      const mineRes = await fetchMine()
+      const currentRecord = mineRes.data.find((c) => c.id === realId) || null
+
+      if (!currentRecord) {
+        setSyncError('Контейнер не найден')
+        setSyncing(false)
+        return
+      }
+
+      const specRes = await fetchContainerSpec(currentRecord.id)
+      const actualStatus = specRes.data.status
+
+      if (actualStatus !== currentRecord.status) {
+        dispatch(containerStatusPatched({ id: currentRecord.id, status: actualStatus }))
+        setSyncSuccess(`Статус исправлен: было "${currentRecord.status}", стало "${actualStatus}"`)
+      } else {
+        setSyncSuccess('Статус актуален, изменений нет')
+      }
+      // Also update spec
+      setSpec(specRes.data)
+    } catch (err: any) {
+      // Handle 404 - backend DB out of sync with Docker on agent
+      // Try to trigger a refresh from the agent
+      if (err?.status === 404) {
+        try {
+          await refreshContainerByApp(realId || '')
+          setSyncSuccess('Запрошено обновление с агента, статус обновится через несколько секунд')
+        } catch {
+          setSyncError('Не удалось запросить обновление контейнера')
+        }
+      } else {
+        setSyncError('Не удалось проверить статус контейнера')
+      }
+    } finally {
+      setSyncing(false)
+    }
+  }, [realId, dispatch])
 
   useEffect(() => {
     cancelWaitRef.current = false
@@ -109,20 +166,46 @@ export default function ContainerDetails() {
   useEffect(() => {
     const loadRecord = async () => {
       try {
-        const res = await fetchMine()
-        const found = res.data.find((c) => c.id === realId) || null
-        setRecord(found)
-        if (!found) {
+        const containers = await dispatch(fetchMineContainers()).unwrap()
+        if (!containers.some((container) => container.id === realId)) {
           setError('Контейнер не найден')
         }
       } catch {
         setError('Ошибка загрузки контейнера')
       }
     }
-    loadRecord()
-    const timer = setInterval(loadRecord, 5000)
+    void loadRecord()
+    // Fallback polling only while the WebSocket is down.
+    if (connected) {
+      return
+    }
+    const timer = setInterval(() => {
+      if (record && IN_PROGRESS_STATUSES.has(record.status)) {
+        void dispatch(fetchMineContainers())
+      }
+    }, 10000)
     return () => clearInterval(timer)
-  }, [realId])
+  }, [realId, record?.status, connected, dispatch])
+
+  // Auto-verify status on initial load only (not on every record change to avoid loops)
+  const verifiedForRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (record && verifiedForRef.current !== record.id) {
+      verifiedForRef.current = record.id
+      void verifyContainerStatus()
+    }
+  }, [record, verifyContainerStatus])
+
+  // Fallback status sync: only while the WebSocket is down.
+  useEffect(() => {
+    if (!record || connected) return
+
+    const interval = setInterval(() => {
+      verifyContainerStatus()
+    }, 30000)
+
+    return () => clearInterval(interval)
+  }, [record, connected, verifyContainerStatus])
 
   useEffect(() => {
     if (!record) {
@@ -133,31 +216,9 @@ export default function ContainerDetails() {
       .catch(() => setSpec(null))
   }, [record])
 
-  const wantLogs = tab === 1 && record ? record.id : ''
-  const isStaleLogs = logsLoadedFor !== wantLogs
-  const logsLoading = wantLogs !== '' && (logs === null || isStaleLogs)
-
-  useEffect(() => {
-    if (!wantLogs) {
-      return
-    }
-    const loadingFor = wantLogs
-    let alive = true
-    fetchContainerLogs(loadingFor)
-      .then((res) => {
-        if (!alive) return
-        setLogs(res.data.split('\n'))
-        setLogsLoadedFor(loadingFor)
-      })
-      .catch(() => {
-        if (!alive) return
-        setLogs([])
-        setLogsLoadedFor(loadingFor)
-      })
-    return () => {
-      alive = false
-    }
-  }, [wantLogs])
+  const logsEnabled = tab === 1 && !!record
+  const { lines: logs, error: logsError, live: logsLive } = useContainerLogs(record?.id || '', logsEnabled, MAX_LOG_LINES)
+  const logsLoading = logsEnabled && logs === null && !logsError
 
   const isBuilding = record ? IN_PROGRESS_STATUSES.has(record.status) : false
   const recordId = record?.id
@@ -182,6 +243,10 @@ export default function ContainerDetails() {
         if (prev === null || prev === '') {
           return line
         }
+        const lines = prev.split('\n')
+        if (lines.length >= MAX_BUILD_LOG_LINES) {
+          return lines.slice(-(MAX_BUILD_LOG_LINES - 1)).join('\n') + '\n' + line
+        }
         return `${prev}\n${line}`
       })
     }
@@ -204,7 +269,7 @@ export default function ContainerDetails() {
     const startPollingFallback = () => {
       if (pollTimer !== null) return
       loadBuildLogOnce()
-      pollTimer = setInterval(loadBuildLogOnce, 2000)
+      pollTimer = setInterval(loadBuildLogOnce, 5000)
     }
 
     const openStream = () => {
@@ -242,11 +307,12 @@ export default function ContainerDetails() {
   }, [isBuilding, recordId])
 
   useEffect(() => {
+    if (!follow) return
     const logBox = buildLogBoxRef.current
     if (logBox) {
       logBox.scrollTop = logBox.scrollHeight
     }
-  }, [buildLog])
+  }, [buildLog, follow])
 
   const handleCopyLogs = () => {
     const allLogs = (logs || []).join('\n')
@@ -307,12 +373,9 @@ export default function ContainerDetails() {
         if (cancelWaitRef.current) return
         await new Promise((resolve) => setTimeout(resolve, 2000))
         try {
-          const res = await fetchMine()
-          const found = res.data.find((c) => c.id === record.id)
-          if (found) {
-            setRecord(found)
-            if (found.status === targetStatus || found.status === 'error') break
-          }
+          const containers = await dispatch(fetchMineContainers()).unwrap()
+          const found = containers.find((c) => c.id === record.id)
+          if (found && (found.status === targetStatus || found.status === 'error')) break
         } catch {
           // continue polling
         }
@@ -394,6 +457,14 @@ export default function ContainerDetails() {
           </Box>
         </Box>
         <Stack direction="row" spacing={1}>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshCw size={16} />}
+            onClick={verifyContainerStatus}
+            disabled={syncing || busy}
+          >
+            {syncing ? 'Проверка...' : 'Проверить статус'}
+          </Button>
           <Button variant="outlined" startIcon={<RotateCcw size={16} />} disabled={busy} onClick={() => handleOp('restart')}>
             {busy ? 'Перезапуск...' : 'Перезапустить'}
           </Button>
@@ -410,6 +481,18 @@ export default function ContainerDetails() {
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
+      {successMessage && <Alert severity="success">{successMessage}</Alert>}
+      <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => setSyncError(null)}>
+        <Alert severity="error" onClose={() => setSyncError(null)} sx={{ flexGrow: 1 }}>
+          <AlertCircle size={18} sx={{ mr: 1 }} />
+          {syncError}
+        </Alert>
+      </Snackbar>
+      <Snackbar open={!!syncSuccess} autoHideDuration={6000} onClose={() => setSyncSuccess(null)}>
+        <Alert severity="success" onClose={() => setSyncSuccess(null)} sx={{ flexGrow: 1 }}>
+          {syncSuccess}
+        </Alert>
+      </Snackbar>
       {successMessage && <Alert severity="success">{successMessage}</Alert>}
 
       <Card className={styles.tabsCard}>
@@ -483,6 +566,7 @@ export default function ContainerDetails() {
             <Box className={styles.logs__toolbar}>
               <Terminal size={16} />
               <Typography variant="caption" sx={{ fontWeight: 600 }}>Логи контейнера</Typography>
+              {logsLive && <Chip size="small" label="live" color="success" variant="outlined" />}
               <input className={styles.logs__search} placeholder="Поиск по логам..." value={search} onChange={e => setSearch(e.target.value)} />
               <Chip size="small" label={followLabel} onClick={handleToggleFollow} color={followColor} sx={{ cursor: 'pointer' }} />
               <IconButton size="small" onClick={handleDownloadLogs} sx={{ color: '#e2e8f0' }}><Download size={16} /></IconButton>
@@ -494,20 +578,21 @@ export default function ContainerDetails() {
                   {buildLog === null ? (buildLogError || 'Подключение к логу сборки...') : buildLog === '' ? 'Пока пусто — первые шаги появятся через пару секунд...' : buildLog}
                 </Box>
               )}
+              {!isBuilding && logsError && <Alert severity="warning" sx={{ mb: 1 }}>{logsError}</Alert>}
               {!isBuilding && logsLoading && <Typography color="text.secondary">Загрузка логов...</Typography>}
               {!isBuilding && !logsLoading && logs !== null && (
                 <Box sx={{ bgcolor: '#0b1220', color: '#e2e8f0', fontFamily: 'monospace', fontSize: 12, p: 2, borderRadius: 2, maxHeight: 380, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                   {logs.length === 0 ? '— нет логов —' : logs.map((line, lineIndex) => <div key={lineIndex} className={styles.logs__line}>{line}</div>)}
                 </Box>
               )}
-              {!isBuilding && !logsLoading && logs === null && (
+              {!isBuilding && !logsLoading && logs === null && !logsError && (
                 <Typography color="text.secondary">Контейнер не найден на сервере</Typography>
               )}
               {follow && !isBuilding && <Typography variant="caption" sx={{ opacity: .5, display: 'block', mt: 1 }}>— режим слежения, новые строки появятся автоматически —</Typography>}
             </Box>
           </Box>
           <CardContent>
-            <Typography variant="caption" color="text.secondary">Логи получаются через `docker logs {record.name}`. В реальном бэкенде — стриминг по WebSocket.</Typography>
+            <Typography variant="caption" color="text.secondary">История логов загружается сразу, новые строки приходят по WebSocket.</Typography>
           </CardContent>
         </Card>
       )}

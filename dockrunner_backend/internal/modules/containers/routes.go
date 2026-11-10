@@ -9,6 +9,7 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, jwtSecret string) {
 	// WebSocket stream authenticates via ?token= (browsers set no headers),
 	// so it lives outside the Bearer middleware group.
 	rg.GET("/containers/:id/build-log/stream", h.BuildLogStream)
+	rg.GET("/containers/:id/logs/stream", h.ContainerLogStream)
 	containers := rg.Group("/containers")
 	containers.Use(middleware.Auth(jwtSecret))
 	{
