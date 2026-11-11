@@ -48,7 +48,7 @@ export default function Login() {
     <Box className={styles.page}>
       <Card className={styles.card}>
         <CardContent className={styles.card__content}>
-          <Stack alignItems="center" spacing={1.5} className={styles.brand}>
+          <Stack spacing={1.5} className={styles.brand} sx={{ alignItems: 'center' }}>
             <Link to="/" aria-label="На главную">
               <Box className={styles.brand__logo}><Server size={24} /></Box>
             </Link>
@@ -65,13 +65,15 @@ export default function Login() {
               value={password}
               onChange={e => setPassword(e.target.value)}
               fullWidth
-              InputProps={{
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton onClick={handleToggleShow} edge="end" size="small">{show ? <EyeOff size={18} /> : <Eye size={18} />}</IconButton>
-                  </InputAdornment>
-                ),
-              } as any}
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton onClick={handleToggleShow} edge="end" size="small">{show ? <EyeOff size={18} /> : <Eye size={18} />}</IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
             />
             <Button variant="contained" size="large" fullWidth startIcon={<LogIn size={18} />} disabled={busy} onClick={handleLogin} className={styles.submitBtn}>Войти</Button>
           </Stack>

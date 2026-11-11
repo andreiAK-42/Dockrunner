@@ -248,7 +248,7 @@ export default function Files() {
               width: "100%", // важно
             }}
           >
-            <FormControl sx={{ minWidth: 220, ...fieldSx }} size="medium">
+            <FormControl sx={fieldSx} size="medium">
               <InputLabel>Сервер</InputLabel>
               <Select
                 value={activeNode}
@@ -264,7 +264,7 @@ export default function Files() {
             </FormControl>
 
             {isAdmin && (
-              <FormControl sx={{ minWidth: 220, ...fieldSx }} size="medium">
+              <FormControl sx={fieldSx} size="medium">
                 <InputLabel>Пользователь</InputLabel>
                 <Select
                   value={ownerLogin}
@@ -350,7 +350,7 @@ export default function Files() {
                     onClick={() => entry.is_dir && openDir(entry.name)}
                   >
                     <TableCell>
-                      <Stack direction="row" spacing={1} alignItems="center">
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                         {entry.is_dir ? (
                           <Folder size={16} />
                         ) : (

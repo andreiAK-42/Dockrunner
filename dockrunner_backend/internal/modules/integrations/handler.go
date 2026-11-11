@@ -20,7 +20,7 @@ func NewHandler(service *Service, logger *zap.Logger) *Handler {
 }
 
 // Catalog godoc
-// @Summary Каталог интеграций (postgres, mongo, redis, ollama)
+// @Summary Каталог интеграций (postgres, mongo, ollama)
 // @Tags integrations
 // @Produce json
 // @Security BearerAuth

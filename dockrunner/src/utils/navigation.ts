@@ -20,7 +20,7 @@ export function findNavItem(pathname: string, items: NavItem[] = NAVIGATION): Na
   const all = flattenNavigation(items);
 
   // 1. Точное совпадение
-  let found = all.find(item => item.path === pathname);
+  const found = all.find(item => item.path === pathname);
   if (found) return found;
 
   // 2. Паттерн с параметрами (/applications/:id)
@@ -70,14 +70,27 @@ export function filterVisible(items: NavItem[], userRole?: string): NavItem[] {
       ...item,
       children: item.children ? filterVisible(item.children, userRole) : undefined
     }))
-    .filter(item => item.children?.length || item.path); // убрать пустые группы
+    .filter(item => item.children?.length || item.path || item.hash); // убрать пустые группы (путь, хэш или дети)
 }
 
-/** Проверить, активен ли путь (точное совпадение или префикс) */
-export function isNavActive(currentPath: string, itemPath?: string): boolean {
-  if (!itemPath) return false;
-  if (currentPath === itemPath) return true;
-  return currentPath.startsWith(itemPath + '/');
+/** Проверить, активен ли путь (точное совпадение, префикс или хэш) */
+export function isNavActive(currentPath: string, itemPath?: string, itemHash?: string): boolean {
+  if (!itemPath && !itemHash) return false;
+
+  // Check hash first (for admin sub-tabs) - highest priority
+  if (itemHash && currentPath.includes(itemHash)) return true;
+
+  // Check exact path match
+  if (itemPath && currentPath === itemPath) return true;
+
+  // Check path prefix with trailing slash (e.g., /admin/users matches /admin)
+  if (itemPath && currentPath.startsWith(itemPath + '/')) return true;
+
+  // Check if current path starts with item path (for parent items like /admin)
+  // BUT skip this if item has a hash (hash items are handled above, don't match parent path)
+  if (itemPath && !itemHash && currentPath.startsWith(itemPath)) return true;
+
+  return false;
 }
 
 /** Получить заголовок страницы для pathname */

@@ -1,6 +1,5 @@
 // Docker-related utilities for port/volume/env mapping
 
-import type { PortInfo } from '../hooks/usePorts'
 import type { DetectedPort } from '../api/containers'
 
 export interface VolumeRow {

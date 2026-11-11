@@ -37,6 +37,8 @@ export function useContainerLogs(containerId: string, enabled: boolean, maxLines
 
   useEffect(() => {
     if (!enabled || !containerId) {
+      // Сброс логов при отключении — синхронизация с внешним потоком.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLines(null)
       setError('')
       setLive(false)
@@ -49,6 +51,8 @@ export function useContainerLogs(containerId: string, enabled: boolean, maxLines
     let historyFromHttp = false
     let gotLive = false
 
+    // Новый контейнер — начинаем с чистого листа.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLines(null)
     setError('')
     setLive(false)

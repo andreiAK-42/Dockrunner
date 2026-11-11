@@ -165,7 +165,7 @@ export default function RequestsTab({ pending, nodes, onChanged, onError }: Requ
         <DialogContent>
           {detailsReq && (
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                 <Chip size="small" label={detailsReq.status} color={detailsReq.status === 'pending' ? 'warning' : detailsReq.status === 'approved' ? 'success' : 'error'} variant="outlined" />
                 <Typography variant="body2" color="text.secondary">от {detailsReq.ownerLogin} · создана {new Date(detailsReq.createdAt).toLocaleString('ru-RU')}</Typography>
               </Stack>
@@ -202,7 +202,7 @@ export default function RequestsTab({ pending, nodes, onChanged, onError }: Requ
                 {(detailsReq.ports || []).length === 0 ? (
                   <Typography variant="body2" color="text.secondary">—</Typography>
                 ) : (
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  <Stack direction="row" spacing={0.5} useFlexGap sx={{ flexWrap: 'wrap' }}>
                     {detailsReq.ports.map((p) => <Chip key={p.host_port} size="small" label={`${p.host_port}→${p.container_port}`} />)}
                   </Stack>
                 )}

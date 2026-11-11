@@ -53,11 +53,13 @@ export default function PricingTab({ rates, nodes, onChanged, onError }: Pricing
     <>
       <Card>
         <CardContent>
-          <Stack spacing={2} sx={{ mb: 2 }}>
-            <Typography variant="h6" sx={{ fontWeight: 700 }}>Тарифы почасово</Typography>
-            <Typography color="text.secondary">Настройте стоимость ресурсов для каждого агента (руб/час)</Typography>
+          <Stack direction="row" spacing={2} sx={{ mb: 2, justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Stack spacing={0.5}>
+              <Typography variant="h6" sx={{ fontWeight: 700 }}>Тарифы почасово</Typography>
+              <Typography color="text.secondary">Настройте стоимость ресурсов для каждого агента (руб/час)</Typography>
+            </Stack>
+            <Button variant="contained" startIcon={<Settings size={18} />} onClick={() => openPricingDialog()}>Добавить тариф</Button>
           </Stack>
-          <Button variant="contained" startIcon={<Settings size={18} />} onClick={() => openPricingDialog()}>Добавить тариф</Button>
           <TableContainer>
             <Table size="small">
               <TableHead>
@@ -104,9 +106,9 @@ export default function PricingTab({ rates, nodes, onChanged, onError }: Pricing
             ) : (
               <TextField label="ID агента" value={pricingAgentId} onChange={(e) => setPricingAgentId(e.target.value)} placeholder="worker-01" helperText="Серверы пока не на связи — впишите ID вручную" />
             )}
-            <TextField type="number" label="CPU (руб/ядро/час)" value={pricingCpu} onChange={(e) => setPricingCpu(parseFloat(e.target.value) || 0)} placeholder="1" InputProps={{ step: 0.01 }} />
-            <TextField type="number" label="RAM (руб/ГБ/час)" value={pricingMem} onChange={(e) => setPricingMem(parseFloat(e.target.value) || 0)} placeholder="0.5" InputProps={{ step: 0.01 }} />
-            <TextField type="number" label="Диск (руб/ГБ/час)" value={pricingDisk} onChange={(e) => setPricingDisk(parseFloat(e.target.value) || 0)} placeholder="0.1" InputProps={{ step: 0.01 }} />
+            <TextField type="number" label="CPU (руб/ядро/час)" value={pricingCpu} onChange={(e) => setPricingCpu(parseFloat(e.target.value) || 0)} placeholder="1" slotProps={{ htmlInput: { step: 0.01 } }} />
+            <TextField type="number" label="RAM (руб/ГБ/час)" value={pricingMem} onChange={(e) => setPricingMem(parseFloat(e.target.value) || 0)} placeholder="0.5" slotProps={{ htmlInput: { step: 0.01 } }} />
+            <TextField type="number" label="Диск (руб/ГБ/час)" value={pricingDisk} onChange={(e) => setPricingDisk(parseFloat(e.target.value) || 0)} placeholder="0.1" slotProps={{ htmlInput: { step: 0.01 } }} />
           </Stack>
         </DialogContent>
         <DialogActions>

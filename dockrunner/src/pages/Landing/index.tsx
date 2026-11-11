@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Box, Button, Card, CardContent, Typography, Container, Stack, IconButton } from '@mui/material'
+import { Box, Button, Card, CardContent, Typography, Container, IconButton } from '@mui/material'
 import { Server, Rocket, ShieldCheck, Globe, Cpu, Database, ArrowRight, ChevronLeft, ChevronRight, Layers, Activity } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
@@ -10,7 +10,7 @@ const ADVANTAGES = [
   { icon: <Rocket size={28} />, title: 'Деплой за минуты', desc: 'Вставьте ссылку своего проекта на Git-систему и получите рабочий сервис с доменом и HTTPS за считанные минуты. Никаких пайплайнов вручную.', color: '#3b82f6' },
   { icon: <Server size={28} />, title: 'Разные сервера', desc: 'Различный выбор серверов по CPU, RAM и диску. Балансировка и отказоустойчивость из коробки - без ручного размещения.', color: '#10b981' },
   { icon: <Globe size={28} />, title: 'Домены и TLS', desc: 'Caddy сам выпускает сертификаты, настраивает маршрутизацию и обновляет их. Просто купите домен и укажите его в нашем сервисе.', color: '#8b5cf6' },
-  { icon: <Database size={28} />, title: 'Уже готовые интеграции с популярными базами данных', desc: 'Postgre, Mongo, Redis уже готовы, а если нужно базы данных нет, то можете развернуть её сами!', color: '#f59e0b' },
+  { icon: <Database size={28} />, title: 'Уже готовые интеграции с базами данных', desc: 'PostgreSQL уже доступен, остальные базы можно развернуть самостоятельно через Docker.', color: '#f59e0b' },
   { icon: <Activity size={28} />, title: 'Наблюдаемость', desc: 'Метрики CPU/RAM/Disk по нодам и приложениям, карта серверов и лента деплоев в реальном времени.', color: '#ef4444' },
 ]
 

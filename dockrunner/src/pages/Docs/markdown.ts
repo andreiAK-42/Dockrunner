@@ -64,8 +64,8 @@ export function mdToHtml(md: string, placeholderClass = ''): string {
   // не находит границы абзацев и весь док склеивается в один блок.
   const normalized = md.replace(/\r\n?/g, '\n')
   const kept: string[] = []
-  const stash = (html: string) => `\u0000${kept.push(html) - 1}\u0000`
-  const restore = (html: string) => html.replace(/\u0000(\d+)\u0000/g, (_m, i) => kept[Number(i)] ?? '')
+  const stash = (html: string) => `\uE000${kept.push(html) - 1}\uE000`
+  const restore = (html: string) => html.replace(/\uE000(\d+)\uE000/g, (_m, i) => kept[Number(i)] ?? '')
 
   const withCodeBlocks = normalized.replace(/^```(\w*)\n([\s\S]*?)```/gm, (_match, _lang, code) => {
     return stash(`<pre><code>${escapeHtml(code.trim())}</code></pre>`)

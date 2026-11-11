@@ -17,7 +17,6 @@ import (
 	"dockrunner_backend/internal/modules/integrations/mongo"
 	"dockrunner_backend/internal/modules/integrations/ollama"
 	"dockrunner_backend/internal/modules/integrations/postgres"
-	"dockrunner_backend/internal/modules/integrations/redis"
 )
 
 var (
@@ -36,9 +35,6 @@ type Settings struct {
 	MongoPort        int
 	MongoName        string
 	MongoAdminURL    string
-	RedisHost        string
-	RedisPort        int
-	RedisPassword    string
 	OllamaHost       string
 	OllamaPort       int
 	OllamaURL        string
@@ -81,7 +77,6 @@ func NewService(repo *Repository, cfg Settings, logger *zap.Logger) *Service {
 		managers: map[string]engine.Manager{
 			"postgres": postgres.Manager{AdminURL: cfg.PostgresAdminURL},
 			"mongo":    mongo.Manager{AdminURL: cfg.MongoAdminURL},
-			"redis":    redis.Manager{Addr: fmt.Sprintf("%s:%d", cfg.RedisHost, cfg.RedisPort), Password: cfg.RedisPassword},
 			"ollama":   ollama.Manager{BaseURL: cfg.OllamaURL},
 		},
 		logger: logger,
@@ -92,7 +87,6 @@ func (s *Service) Catalog() []Kind {
 	return []Kind{
 		{ID: "postgres", Group: "database", Name: "PostgreSQL", DefaultPort: fmt.Sprint(s.cfg.PostgresPort), Description: "Реляционная база для приложений.", HasQuota: true, Enabled: s.cfg.PostgresAdminURL != ""},
 		{ID: "mongo", Group: "database", Name: "MongoDB", DefaultPort: fmt.Sprint(s.cfg.MongoPort), Description: "Документная база для гибких схем.", HasQuota: true, Enabled: s.cfg.MongoAdminURL != ""},
-		{ID: "redis", Group: "database", Name: "Redis", DefaultPort: fmt.Sprint(s.cfg.RedisPort), Description: "Кэш и очереди сообщений.", HasQuota: true, Enabled: s.cfg.RedisHost != ""},
 		{ID: "ollama", Group: "ai", Name: "Ollama", DefaultPort: fmt.Sprint(s.cfg.OllamaPort), Description: "Локальные языковые модели по HTTP API.", HasQuota: false, Enabled: s.cfg.OllamaURL != ""},
 	}
 }
@@ -263,8 +257,6 @@ func (s *Service) endpoint(kind string) (string, int) {
 		return s.cfg.PostgresHost, s.cfg.PostgresPort
 	case "mongo":
 		return s.cfg.MongoHost, s.cfg.MongoPort
-	case "redis":
-		return s.cfg.RedisHost, s.cfg.RedisPort
 	case "ollama":
 		return s.cfg.OllamaHost, s.cfg.OllamaPort
 	default:
@@ -301,8 +293,6 @@ func buildConnString(kind, host string, port int, resource, username, password s
 		return fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", username, password, host, port, resource)
 	case "mongo":
 		return fmt.Sprintf("mongodb://%s:%s@%s:%d/%s", username, password, host, port, resource)
-	case "redis":
-		return fmt.Sprintf("redis://%s:%s@%s:%d/0", username, password, host, port)
 	case "ollama":
 		return fmt.Sprintf("http://%s:%d", host, port)
 	default:

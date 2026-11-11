@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Box, Typography, Tabs, Tab, Card, CardContent, Button, Divider } from '@mui/material'
+import { Box, Tabs, Tab, Card, CardContent, Button, Divider } from '@mui/material'
 import { Server, ShieldCheck, Lock, ArrowLeft } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import Footer from '../../components/Footer'

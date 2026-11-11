@@ -81,7 +81,7 @@ export default function Appearance() {
                 <Typography variant="h6" className={styles.sectionTitle}>
                   Режим темы
                 </Typography>
-                <Stack direction="row" spacing={2} alignItems="center">
+                <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
                   <Chip
                     label="Светлая"
                     color={config.mode === "light" ? "primary" : "default"}

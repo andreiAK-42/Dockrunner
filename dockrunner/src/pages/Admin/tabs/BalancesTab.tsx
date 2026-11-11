@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Stack, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, FormControl, InputLabel, Select, MenuItem, Card, CardContent, Paper } from '@mui/material'
+import { Button, Stack, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, FormControl, InputLabel, Select, MenuItem, Card, CardContent, Box } from '@mui/material'
 import { Plus, Check } from 'lucide-react'
 import { addUserBalance, setUserBalance } from '../../../api/admin'
 import type { AdminUser, BalanceTransaction } from '../../../api/admin'
@@ -43,37 +43,37 @@ export default function BalancesTab({ users, transactions, total, page, onPage, 
           <Typography variant="h6" sx={{ fontWeight: 700 }}>Управление балансами</Typography>
           <Typography color="text.secondary">Просмотр транзакций и пополнение балансов пользователей</Typography>
         </Stack>
-        <Paper sx={{ p: 2, mb: 2 }}>
+        <Box sx={{ mb: 2, px: 0 }}>
           <Typography variant="h6" sx={{ mb: 1 }}>Пополнить баланс</Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
-            <FormControl sx={{ minWidth: 220 }}>
-              <InputLabel>Пользователь</InputLabel>
-              <Select value={balanceLogin} label="Пользователь" onChange={(e) => setBalanceLogin(e.target.value)}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <FormControl size="small" sx={{ minWidth: 220, maxWidth: 300, width: '100%' }}>
+              <InputLabel id="balance-user-label">Пользователь</InputLabel>
+              <Select labelId="balance-user-label" value={balanceLogin} label="Пользователь" onChange={(e) => setBalanceLogin(e.target.value)}>
                 {users.map((u) => (
                   <MenuItem key={u.id} value={u.login}>{u.login} ({u.role})</MenuItem>
                 ))}
               </Select>
             </FormControl>
-            <TextField type="number" label="Сумма" value={balanceAmount} onChange={(e) => setBalanceAmount(parseFloat(e.target.value) || 0)} placeholder="1000" sx={{ minWidth: 120 }} />
-            <TextField label="Причина" value={balanceReason} onChange={(e) => setBalanceReason(e.target.value)} placeholder="Пополнение админом" sx={{ flex: 1 }} />
-            <Button variant="contained" startIcon={<Plus size={18} />} disabled={!balanceLogin} onClick={handleAddBalance}>Пополнить</Button>
+            <TextField size="small" type="number" label="Сумма" value={balanceAmount} onChange={(e) => setBalanceAmount(parseFloat(e.target.value) || 0)} placeholder="1000" sx={{ minWidth: 120, maxWidth: 150, width: '100%' }} />
+            <TextField size="small" label="Причина" value={balanceReason} onChange={(e) => setBalanceReason(e.target.value)} placeholder="Пополнение админом" sx={{ minWidth: 200, maxWidth: 400, width: '100%', flex: '1 1 auto' }} />
+            <Button variant="contained" startIcon={<Plus size={18} />} disabled={!balanceLogin} onClick={handleAddBalance} sx={{ height: 36, alignSelf: 'flex-start' }}>Пополнить</Button>
           </Stack>
-        </Paper>
-        <Paper sx={{ p: 2, mb: 2 }}>
+        </Box>
+        <Box sx={{ mb: 2, px: 0 }}>
           <Typography variant="h6" sx={{ mb: 1 }}>Установить баланс</Typography>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
-            <FormControl sx={{ minWidth: 220 }}>
-              <InputLabel>Пользователь</InputLabel>
-              <Select value={balanceLogin} label="Пользователь" onChange={(e) => setBalanceLogin(e.target.value)}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <FormControl size="small" sx={{ minWidth: 220, maxWidth: 300, width: '100%' }}>
+              <InputLabel id="set-balance-user-label">Пользователь</InputLabel>
+              <Select labelId="set-balance-user-label" value={balanceLogin} label="Пользователь" onChange={(e) => setBalanceLogin(e.target.value)}>
                 {users.map((u) => (
                   <MenuItem key={u.id} value={u.login}>{u.login} ({u.role})</MenuItem>
                 ))}
               </Select>
             </FormControl>
-            <TextField type="number" label="Новый баланс" value={balanceSetValue} onChange={(e) => setBalanceSetValue(parseFloat(e.target.value) || 0)} placeholder="5000" sx={{ minWidth: 120 }} />
-            <Button variant="contained" startIcon={<Check size={14} />} disabled={!balanceLogin} onClick={handleSetBalance}>Установить</Button>
+            <TextField size="small" type="number" label="Новый баланс" value={balanceSetValue} onChange={(e) => setBalanceSetValue(parseFloat(e.target.value) || 0)} placeholder="5000" sx={{ minWidth: 120, maxWidth: 150, width: '100%' }} />
+            <Button variant="contained" startIcon={<Check size={14} />} disabled={!balanceLogin} onClick={handleSetBalance} sx={{ height: 36, alignSelf: 'flex-start' }}>Установить</Button>
           </Stack>
-        </Paper>
+        </Box>
         <Typography variant="h6" sx={{ fontWeight: 700, mb: 1 }}>Все транзакции</Typography>
         <TableContainer>
           <Table size="small">
@@ -107,7 +107,7 @@ export default function BalancesTab({ users, transactions, total, page, onPage, 
           </Table>
         </TableContainer>
         {total > 20 && (
-          <Stack direction="row" spacing={1} justifyContent="center" sx={{ mt: 2 }}>
+          <Stack direction="row" spacing={1} sx={{ justifyContent: 'center', mt: 2 }}>
             <Button size="small" disabled={page === 1} onClick={() => onPage(page - 1)}>Назад</Button>
             <Typography variant="body2" sx={{ alignSelf: 'center' }}>Страница {page} из {Math.ceil(total / 20)}</Typography>
             <Button size="small" disabled={page >= Math.ceil(total / 20)} onClick={() => onPage(page + 1)}>Вперёд</Button>

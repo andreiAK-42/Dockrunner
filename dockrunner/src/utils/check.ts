@@ -1,6 +1,6 @@
 // Check/polling utilities for repository verification
 
-import type { CheckStatus, DetectedPort } from '../api/containers'
+import type { CheckStatus } from '../api/containers'
 
 export const CHECK_POLL_INTERVAL_MS = 2000
 export const CHECK_TIMEOUT_MS = 90000

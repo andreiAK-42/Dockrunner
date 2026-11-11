@@ -203,10 +203,9 @@ export default function Dashboard() {
   return (
     <div className={styles.page}>
       {error && <Alert severity="error">{error}</Alert>}
-      <Typography variant="h5" sx={{ fontWeight: 600, mb: 3 }}>Дашборд</Typography>
       <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => setSyncError(null)}>
         <Alert severity="error" onClose={() => setSyncError(null)} sx={{ flexGrow: 1 }}>
-          <AlertCircle size={18} sx={{ mr: 1 }} />
+          <AlertCircle size={18} style={{ marginRight: 8 }} />
           {syncError}
         </Alert>
       </Snackbar>
@@ -288,12 +287,12 @@ export default function Dashboard() {
       <Card>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 0.5, fontWeight: 600 }}>Статистика контейнера</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Живая нагрузка вашего контейнера — выберите из списка</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Живая нагрузка вашего контейнера</Typography>
           {containers.length === 0 ? (
-            <Typography color="text.secondary">Нет контейнеров — создайте первое приложение.</Typography>
+            <Typography color="text.secondary">Нет контейнеров - создайте первое приложение!</Typography>
           ) : (
             <Stack spacing={2}>
-              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { sm: 'center' } }}>
                 <FormControl sx={{ minWidth: 240, flex: 1 }}>
                   <InputLabel>Контейнер</InputLabel>
                   <Select value={statsContainerId} label="Контейнер" onChange={(e) => handleSelectStatsContainer(e.target.value)}>
@@ -310,7 +309,7 @@ export default function Dashboard() {
                 <Typography variant="body2" color="text.secondary">Выберите контейнер, чтобы увидеть CPU и RAM в реальном времени.</Typography>
               )}
               {statsLoading && (
-                <Stack direction="row" spacing={1.5} alignItems="center"><CircularProgress size={18} /><Typography variant="body2" color="text.secondary">Опрос воркера…</Typography></Stack>
+                <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}><CircularProgress size={18} /><Typography variant="body2" color="text.secondary">Опрос воркера…</Typography></Stack>
               )}
               {statsError && <Alert severity="warning">{statsError}</Alert>}
               {stats && statsContainer && !statsLoading && (
@@ -336,12 +335,11 @@ export default function Dashboard() {
         </CardContent>
       </Card>
 
-      <Grid container spacing={3} alignItems="stretch">
+      <Grid container spacing={3} sx={{ alignItems: 'stretch' }}>
         <Grid size={{ xs: 12, lg: 8 }}>
           <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
             <CardContent sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 2.5, '&:last-child': { pb: 2.5 } }}>
-              <Typography variant="h6" sx={{ mb: 0.5, fontWeight: 600, flexShrink: 0 }}>Расположение серверов</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>Общая карта кластера — нагрузка на ней тоже общая</Typography>
+              <Typography variant="h6" sx={{ mb: 0.5, fontWeight: 600, flexShrink: 0 }}>Карта серверов</Typography>
               {nodesLoading && <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Загрузка серверов...</Typography>}
               {nodesError && <Typography variant="body2" color="error" sx={{ mb: 1 }}>{nodesError}</Typography>}
               <Box sx={{ flex: 1, minHeight: 320, display: 'flex', overflow: 'hidden', borderRadius: 2 }}>

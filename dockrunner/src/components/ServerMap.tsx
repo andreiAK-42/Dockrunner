@@ -72,7 +72,7 @@ function UsageBar({
 
   return (
     <Box>
-      <Stack direction="row" alignItems="baseline" sx={{ mb: 0.5 }}>
+      <Stack direction="row" sx={{ alignItems: 'baseline', mb: 0.5 }}>
         <Typography variant="caption" color="text.secondary">
           {label}
         </Typography>
@@ -148,7 +148,7 @@ function NodeTooltip({ node }: { node: WorkerNode }) {
             </Typography>
           )}
         </Box>
-        <Stack direction="row" alignItems="center" sx={{ mb: 1.5 }}>
+        <Stack direction="row" sx={{ alignItems: 'center', mb: 1.5 }}>
           <Typography variant="caption" color="text.secondary">
             Статус
           </Typography>
@@ -194,7 +194,7 @@ function NodeTooltip({ node }: { node: WorkerNode }) {
             {node.containers}
           </Typography>
         </Stack>
-        <Stack direction="row" alignItems="baseline" sx={{ mt: 1 }}>
+        <Stack direction="row" sx={{ alignItems: 'baseline', mt: 1 }}>
           <Typography variant="caption" color="text.secondary">
             Heartbeat
           </Typography>
@@ -202,7 +202,7 @@ function NodeTooltip({ node }: { node: WorkerNode }) {
             {timeAgo(node.lastSeen)}
           </Typography>
         </Stack>
-        <Stack direction="row" alignItems="baseline" sx={{ mt: 1 }}>
+        <Stack direction="row" sx={{ alignItems: 'baseline', mt: 1 }}>
           <Typography variant="caption" color="text.secondary">
             Пинг
           </Typography>
@@ -210,7 +210,7 @@ function NodeTooltip({ node }: { node: WorkerNode }) {
             <PingText url={node.healthUrl} />
           </Box>
         </Stack>
-        <Stack direction="row" alignItems="baseline" sx={{ mt: 1 }}>
+        <Stack direction="row" sx={{ alignItems: 'baseline', mt: 1 }}>
           <Typography variant="caption" color="text.secondary">
             IP
           </Typography>
@@ -218,7 +218,7 @@ function NodeTooltip({ node }: { node: WorkerNode }) {
             {nodeIp}
           </Typography>
         </Stack>
-        <Stack direction="row" alignItems="baseline" sx={{ mt: 1 }}>
+        <Stack direction="row" sx={{ alignItems: 'baseline', mt: 1 }}>
           <Typography variant="caption" color="text.secondary">
             Сеть
           </Typography>

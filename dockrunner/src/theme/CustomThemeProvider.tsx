@@ -82,6 +82,7 @@ function loadInitialSafe(): CustomUIConfig {
   return loadInitial()
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useCustomTheme() {
   const ctx = useContext(CustomThemeContext)
   if (!ctx) {

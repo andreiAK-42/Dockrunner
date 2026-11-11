@@ -173,10 +173,24 @@ function tokenizeDockerCommand(command: string): string[] {
   return tokens
 }
 
-export function parseDockerRunCommand(command: string) {
+export interface ParsedDockerRunCommand {
+  name: string
+  image: string
+  env: Record<string, string>
+  ports: { host: number; container: number }[]
+  volumes: { name: string; host_path: string; container_path: string }[]
+  restart_policy: string
+  entrypoint: string[]
+  cmd: string[]
+  working_dir: string
+  user: string
+  network?: string
+}
+
+export function parseDockerRunCommand(command: string): ParsedDockerRunCommand {
   const args = tokenizeDockerCommand(command)
   if (args[0] !== 'docker' || args[1] !== 'run') throw new Error('Ожидается команда docker run')
-  const result: any = { name: '', image: '', env: {}, ports: [], volumes: [], restart_policy: 'no', entrypoint: [], cmd: [], working_dir: '', user: '' }
+  const result: ParsedDockerRunCommand = { name: '', image: '', env: {}, ports: [], volumes: [], restart_policy: 'no', entrypoint: [], cmd: [], working_dir: '', user: '' }
   let i = 2
   while (i < args.length) {
     const arg = args[i]

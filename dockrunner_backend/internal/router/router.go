@@ -204,7 +204,7 @@ func New(deps Dependencies) *gin.Engine {
 	quotasHandler := quotas.NewHandler(quotasService, deps.Logger)
 	quotas.RegisterRoutes(v1, quotasHandler, deps.Config.JWTSecret)
 
-	// --- Integrations (postgres/mongo/redis + ollama и новые типы) ---
+	// --- Integrations (postgres/mongo + ollama и новые типы) ---
 	integrationsRepo := integrations.NewRepository(deps.Postgres, deps.Logger)
 	integrationsService := integrations.NewService(integrationsRepo, integrations.Settings{
 		PostgresHost:     deps.Config.DBPostgresHost,
@@ -215,9 +215,6 @@ func New(deps Dependencies) *gin.Engine {
 		MongoPort:        deps.Config.DBMongoPort,
 		MongoName:        deps.Config.DBMongoName,
 		MongoAdminURL:    deps.Config.DBMongoAdminURL,
-		RedisHost:        deps.Config.DBRedisHost,
-		RedisPort:        deps.Config.DBRedisPort,
-		RedisPassword:    deps.Config.DBRedisPassword,
 		OllamaHost:       deps.Config.OllamaHost,
 		OllamaPort:       deps.Config.OllamaPort,
 		OllamaURL:        deps.Config.OllamaURL,

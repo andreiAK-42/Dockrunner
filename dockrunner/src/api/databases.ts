@@ -1,6 +1,6 @@
 import { apiRequest } from './client'
 
-export type DbId = 'postgres' | 'redis' | 'mongo'
+export type DbId = 'postgres'
 
 export interface DatabaseInfo {
   id: DbId

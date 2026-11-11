@@ -25,6 +25,8 @@ export default function Docs() {
   const activeDoc = DOCS.find((doc) => doc.id === active) || DOCS[0]
 
   useEffect(() => {
+    // Загрузка документа — синхронизация с внешним ресурсом (fetch).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     fetch(activeDoc.file)
       .then((response) => {

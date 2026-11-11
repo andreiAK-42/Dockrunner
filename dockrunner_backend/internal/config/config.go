@@ -74,9 +74,6 @@ type Config struct {
 	DBMongoPort        int
 	DBMongoName        string
 	DBMongoAdminURL    string
-	DBRedisHost        string
-	DBRedisPort        int
-	DBRedisPassword    string
 	OllamaHost         string
 	OllamaPort         int
 	OllamaURL          string
@@ -143,9 +140,6 @@ func Load() (*Config, error) {
 		DBMongoPort:        getInt("DB_MONGO_PORT", 27017),
 		DBMongoName:        getEnv("DB_MONGO_NAME", "appdb"),
 		DBMongoAdminURL:    getEnv("DB_MONGO_ADMIN_URL", ""),
-		DBRedisHost:        getEnv("DB_REDIS_HOST", "redis.dockrunner.local"),
-		DBRedisPort:        getInt("DB_REDIS_PORT", 6379),
-		DBRedisPassword:    getEnv("DB_REDIS_PASSWORD", ""),
 		OllamaHost:         getEnv("OLLAMA_HOST", "ollama.dockrunner.local"),
 		OllamaPort:         getInt("OLLAMA_PORT", 11434),
 		OllamaURL:          getEnv("OLLAMA_URL", ""),

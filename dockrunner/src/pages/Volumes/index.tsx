@@ -79,13 +79,13 @@ export default function Volumes() {
       </Box>
       <Card><CardContent><Typography variant="h6" className={styles.sectionTitle}>Постоянные тома</Typography>
         {loading ? (
-          <Stack alignItems="center" sx={{ py: 4 }}><CircularProgress /></Stack>
+          <Stack sx={{ alignItems: 'center', py: 4 }}><CircularProgress /></Stack>
         ) : volumes.length === 0 ? (
           <Typography color="text.secondary" sx={{ textAlign: 'center', py: 3 }}>Нет томов — создайте первый</Typography>
         ) : (
           <Stack className={styles.volumeList}>{volumes.map((volume) => (
             <Box key={`${volume.node_id}/${volume.name}`} className={styles.volumeItem}>
-              <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ md: 'center' }} gap={2}>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ alignItems: { md: 'center' } }}>
                 <Database size={21} />
                 <Box className={styles.volumeItem__main}>
                   <Typography className={styles.volumeItem__name}>{volume.name}</Typography>

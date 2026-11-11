@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Card, CardContent, Stack, Typography, CircularProgress, IconButton, LinearProgress, Chip, Alert, Divider } from '@mui/material'
+import { Box, Button, Card, CardContent, Stack, Typography, CircularProgress, IconButton, LinearProgress, Alert, Divider } from '@mui/material'
 import { Database, Copy, KeyRound, Trash2, Puzzle, RotateCcw } from 'lucide-react'
 import {
   fetchIntegrations,
@@ -136,7 +136,7 @@ export default function Integrations() {
     return (
       <Card key={item.id}>
         <CardContent>
-          <Stack direction="row" spacing={1.5} alignItems="center" sx={{ mb: 1 }}>
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', mb: 1 }}>
             <Box className={styles.dbIcon}>{item.group === 'database' ? <Database size={20} /> : <Puzzle size={20} />}</Box>
             <Box>
               <Typography variant="h6" sx={{ fontWeight: 700 }}>{item.name}</Typography>
@@ -166,7 +166,7 @@ export default function Integrations() {
                   <Typography variant="body2" color="text.secondary">Порт</Typography>
                   <Typography variant="body2" sx={{ fontWeight: 600, fontFamily: 'monospace' }}>{account.port}</Typography>
                 </Box>
-                {item.group === 'database' && item.id !== 'redis' && (
+                {item.group === 'database' && (
                   <Box className={styles.creds__row}>
                     <Typography variant="body2" color="text.secondary">База</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 600, fontFamily: 'monospace' }}>{account.resource}</Typography>
@@ -212,7 +212,7 @@ export default function Integrations() {
 
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
+          <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Базы данных: {usageGB.toFixed(1)} / {limitGB.toFixed(1)} ГБ</Typography>
           </Stack>
           <LinearProgress variant="determinate" value={usagePercent} color={limitReached ? 'error' : 'primary'} sx={{ mt: 1.5, height: 8, borderRadius: 999 }} />
@@ -242,7 +242,7 @@ export default function Integrations() {
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 2 }}>Все учётки ({users.length})</Typography>
             <Stack spacing={1.5} divider={<Divider />}>
               {users.map((u) => (
-                <Stack key={u.id} direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+                <Stack key={u.id} direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                   <Box sx={{ flex: 1 }}>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>
                       {u.username}{' '}

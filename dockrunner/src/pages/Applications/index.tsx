@@ -169,7 +169,7 @@ export default function Applications() {
       renderCell: (params) => {
         const services = (params.row.services || []) as string[]
         return (
-          <Stack spacing={0} alignItems="center">
+          <Stack spacing={0} sx={{ alignItems: 'center' }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>{params.value}</Typography>
             {services.length > 0 && (
               <Typography variant="caption" color="text.secondary">{services.length} конт.: {services.join(', ')}</Typography>
@@ -231,7 +231,7 @@ export default function Applications() {
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => setSyncError(null)}>
         <Alert severity="error" onClose={() => setSyncError(null)} sx={{ flexGrow: 1 }}>
-          <AlertCircle size={18} sx={{ mr: 1 }} />
+          <AlertCircle size={18} style={{ marginRight: 8 }} />
           {syncError}
         </Alert>
       </Snackbar>
@@ -244,7 +244,7 @@ export default function Applications() {
         <CardContent className={styles.cardContentNoPad}>
           <Box className={styles.gridWrap}>
             {loading ? (
-              <Stack alignItems="center" sx={{ py: 6 }}><CircularProgress /></Stack>
+              <Stack sx={{ alignItems: 'center', py: 6 }}><CircularProgress /></Stack>
             ) : tab === 0 ? (
               <DataGrid
                 rows={rows}

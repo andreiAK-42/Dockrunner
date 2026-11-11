@@ -8,7 +8,7 @@ import type { EnvVar } from '../../types/envConfig'
 import styles from './EnvConfigs.module.scss'
 
 export default function EnvConfigs() {
-  const { configs, loading, canCreate, remaining, create, update, remove } = useEnvConfigs()
+  const { configs, loading, canCreate, create, update, remove } = useEnvConfigs()
   const [open, setOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -135,13 +135,13 @@ export default function EnvConfigs() {
 
       <Card>
         <CardContent>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <Typography variant="body2" sx={{ fontWeight: 600 }}>Использовано {configs.length} / 10</Typography>
           </Stack>
           <Box sx={{ mt: 2, height: 8, borderRadius: 999, bgcolor: 'divider', overflow: 'hidden' }}>
             <Box sx={{ width: `${configs.length * 10}%`, height: '100%', bgcolor: configs.length >= 10 ? 'error.main' : 'primary.main', transition: 'width .3s' }} />
           </Box>
-          {!canCreate && <Stack direction="row" gap={1} alignItems="center" sx={{ mt: 1.5, color: 'warning.main' }}><AlertCircle size={16} /><Typography variant="caption">Лимит исчерпан — удалите старый конфиг чтобы создать новый.</Typography></Stack>}
+          {!canCreate && <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1.5, color: 'warning.main' }}><AlertCircle size={16} /><Typography variant="caption">Лимит исчерпан — удалите старый конфиг чтобы создать новый.</Typography></Stack>}
         </CardContent>
       </Card>
 

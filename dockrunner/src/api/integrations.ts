@@ -1,6 +1,6 @@
 import { apiRequest } from './client'
 
-export type IntegrationId = 'postgres' | 'redis' | 'mongo' | 'ollama'
+export type IntegrationId = 'postgres' | 'mongo' | 'ollama'
 export type IntegrationGroup = 'database' | 'ai' | string
 
 export interface IntegrationKind {

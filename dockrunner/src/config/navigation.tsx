@@ -19,16 +19,19 @@ export interface NavItem {
   isGroupHeader?: boolean;
   /** Порядок сортировки внутри родителя */
   order?: number;
-  /** Скрыть из бокового меню, но оставить для хлебных крошков (детали, модалки) */
+  /** Скрыть из бокового меню, но оставить для хлебных крошек (детали, модалки) */
   hiddenFromMenu?: boolean;
   /** Кастомный лейбл для хлебных крошек (если отличается от label) */
   breadcrumbLabel?: string;
+  /** Хэш для глубокой ссылки во вкладки (например, #users, #logs) */
+  hash?: string;
 }
 
 import {
   LayoutDashboard,
   Box as BoxIcon,
   FileCode2,
+  FileClock,
   Puzzle,
   FolderOpen,
   BookOpen,
@@ -38,14 +41,15 @@ import {
   Users,
   Server,
   Terminal,
-  Settings,
+  DollarSign,
+  CreditCard,
 } from 'lucide-react';
 
 export const NAVIGATION: NavItem[] = [
   // ── Главные разделы (видно пользователям и админам) ──
-  { key: 'dashboard',       label: 'Статистика',        icon: <LayoutDashboard size={20} />, path: '/dashboard',           roles: ['user', 'admin'] },
+  { key: 'dashboard',       label: 'Статистика',        icon: <LayoutDashboard size={20} />,   path: '/dashboard',           roles: ['user'] },
   { key: 'applications',    label: 'Приложения',        icon: <BoxIcon size={20} />,           path: '/applications',        roles: ['user', 'admin'] },
-  { key: 'env-configs',     label: 'Конфигурации .env', icon: <FileCode2 size={20} />,       path: '/env-configs',         roles: ['user', 'admin'] },
+  { key: 'env-configs',     label: 'Конфигурации .env', icon: <FileCode2 size={20} />,         path: '/env-configs',         roles: ['user'] },
   { key: 'integrations',    label: 'Интеграции',        icon: <Puzzle size={20} />,            path: '/integrations',        roles: ['user', 'admin'] },
   { key: 'files',           label: 'Файлы',             icon: <FolderOpen size={20} />,        path: '/files',               roles: ['user', 'admin'] },
 
@@ -55,16 +59,20 @@ export const NAVIGATION: NavItem[] = [
     label: 'Администрирование',
     icon: <ShieldCheck size={20} />,
     roles: ['admin'],
+    path: '/admin',
     children: [
-      { key: 'admin-users',   label: 'Пользователи',  icon: <Users size={20} />,   path: '/admin/users',   roles: ['admin'] },
-      { key: 'admin-nodes',   label: 'Узлы',          icon: <Server size={20} />,  path: '/admin/nodes',   roles: ['admin'] },
-      { key: 'admin-logs',    label: 'Логи',          icon: <Terminal size={20} />, path: '/admin/logs',    roles: ['admin'] },
-      { key: 'admin-settings',label: 'Настройки',     icon: <Settings size={20} />, path: '/admin/settings',roles: ['admin'] },
+      { key: 'admin-users',      label: 'Пользователи',  icon: <Users size={20} />,   path: '/admin', hash: '#users',      roles: ['admin'] },
+      { key: 'admin-containers', label: 'Контейнеры',    icon: <BoxIcon size={20} />, path: '/admin', hash: '#containers', roles: ['admin'] },
+      { key: 'admin-nodes',      label: 'Серверы',       icon: <Server size={20} />,  path: '/admin', hash: '#servers',  roles: ['admin'] },
+      { key: 'admin-requests',   label: 'Заявки',        icon: <FileClock size={20} />, path: '/admin', hash: '#requests', roles: ['admin'] },
+      { key: 'admin-logs',       label: 'Логи',          icon: <Terminal size={20} />, path: '/admin', hash: '#logs',     roles: ['admin'] },
+      { key: 'admin-pricing',    label: 'Тарифы',        icon: <DollarSign size={20} />, path: '/admin', hash: '#pricing',  roles: ['admin'] },
+      { key: 'admin-balances',   label: 'Балансы',       icon: <CreditCard size={20} />, path: '/admin', hash: '#balances', roles: ['admin'] },
     ]
   },
 
   // ── Профиль / настройки (видно всем, но не в меню админа) ──
-  { key: 'docs',         label: 'Документация',   icon: <BookOpen size={20} />,   path: '/docs',          roles: ['user', 'admin'] },
+  { key: 'docs',         label: 'Документация',   icon: <BookOpen size={20} />,   path: '/docs',          roles: ['user'] },
   { key: 'appearance',   label: 'Персонализация', icon: <Palette size={20} />,    path: '/appearance',    roles: ['user', 'admin'] },
   { key: 'profile',      label: 'Профиль',        icon: <User size={20} />,       path: '/profile',       roles: ['user', 'admin'] },
 

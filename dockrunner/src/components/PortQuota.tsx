@@ -112,7 +112,7 @@ export default function PortQuota({ compact = false, sx }: { compact?: boolean; 
           </Stack>
         )}
         {isFull && (
-          <Stack direction="row" gap={1} sx={{ alignItems: 'center', justifyContent: 'flex-start', mt: 1.5, color: 'error.main' }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', justifyContent: 'flex-start', mt: 1.5, color: 'error.main' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}><AlertTriangle size={14} /></Box>
             <Typography variant="caption" sx={{ lineHeight: 1.4 }}>Лимит исчерпан — освободите порт перед созданием контейнера.</Typography>
           </Stack>

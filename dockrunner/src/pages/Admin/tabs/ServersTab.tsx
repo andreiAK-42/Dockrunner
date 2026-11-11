@@ -36,7 +36,7 @@ export default function ServersTab({ nodes, loading, rebooting, onReboot }: Serv
                   Heartbeat: {timeAgo(node.lastSeen)} · Пинг: <PingText url={node.healthUrl} />
                 </Typography>
               </Box>
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                 <Chip size="small" label={node.status === 'online' ? 'Онлайн' : 'Офлайн'} color={node.status === 'online' ? 'success' : 'default'} />
                 <Button size="small" variant="outlined" startIcon={<RotateCcw size={14} />} disabled={rebooting === node.id || node.status !== 'online'} onClick={() => onReboot(node.id)}>
                   {rebooting === node.id ? 'Перезагрузка...' : 'Перезагрузить'}

@@ -1,6 +1,5 @@
-import { useEffect, useState, useCallback } from 'react'
-import { Box, Typography, Card, Tabs, Tab, Divider, Alert } from '@mui/material'
-import { DollarSign, CreditCard } from 'lucide-react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Box, Typography, Alert } from '@mui/material'
 import { fetchAdminUsers, fetchTariffPlans, adminContainerAction, rebootServer, fetchPricing, fetchAllTransactions } from '../../api/admin'
 import type { AdminUser, TariffPlan, PricingRate, BalanceTransaction } from '../../api/admin'
 import { useAgents } from '../../hooks/useAgents'
@@ -14,9 +13,23 @@ import ServersTab from './tabs/ServersTab'
 import RequestsTab from './tabs/RequestsTab'
 import PricingTab from './tabs/PricingTab'
 import BalancesTab from './tabs/BalancesTab'
+import LogsTab from './tabs/LogsTab'
+import { useLocation } from 'react-router-dom'
 import styles from './Admin.module.scss'
 
+// Map hash to tab index
+const HASH_TO_TAB: Record<string, number> = {
+  '#users': 0,
+  '#containers': 1,
+  '#servers': 2,
+  '#requests': 3,
+  '#pricing': 4,
+  '#balances': 5,
+  '#logs': 6,
+}
+
 export default function Admin() {
+  const location = useLocation()
   const dispatch = useAppDispatch()
   const [tab, setTab] = useState(0)
   const [users, setUsers] = useState<AdminUser[]>([])
@@ -32,6 +45,23 @@ export default function Admin() {
   const [actingId, setActingId] = useState('')
   const { nodes, loading: nodesLoading } = useAgents()
   const connected = useRealtimeStatus()
+  const initialTabSet = useRef(false)
+
+  // Initialize tab from URL hash
+  useEffect(() => {
+    const hash = location.hash
+    if (hash && HASH_TO_TAB[hash] !== undefined) {
+      // Вкладка синхронизируется с URL — внешним состоянием навигации.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setTab(HASH_TO_TAB[hash])
+    } else if (!initialTabSet.current) {
+      // Default to first tab if no hash or invalid hash
+      setTab(0)
+    }
+    initialTabSet.current = true
+  }, [location.hash])
+
+  // Update URL hash when tab changes programmatically (if needed)
 
   const reloadAll = useCallback(() => {
     Promise.all([
@@ -106,25 +136,10 @@ export default function Admin() {
   return (
     <Box className={styles.page}>
       <Box className={styles.header}>
-        <Box>
-          <Typography variant="h4" className={styles.header__title}>Администрирование</Typography>
-          <Typography color="text.secondary">Пользователи, контейнеры, серверы, заявки, тарифы и балансы.</Typography>
-        </Box>
+        <Typography variant="h4" className={styles.header__title}>Администрирование</Typography>
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
-
-      <Card>
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 2 }}>
-          <Tab label={`Пользователи (${users.length})`} />
-          <Tab label={`Контейнеры (${containers.length})`} />
-          <Tab label="Серверы" />
-          <Tab label={`Заявки (${pendingRequests.length})`} />
-          <Tab label={<>Тарифы <DollarSign size={14} /></>} />
-          <Tab label={<>Балансы <CreditCard size={14} /></>} />
-        </Tabs>
-        <Divider />
-      </Card>
 
       {tab === 0 && (
         <UsersTab users={users} plans={plans} onChanged={reloadAll} onError={setError} />
@@ -156,6 +171,10 @@ export default function Admin() {
           onChanged={reloadAll}
           onError={setError}
         />
+      )}
+
+      {tab === 6 && (
+        <LogsTab />
       )}
     </Box>
   )

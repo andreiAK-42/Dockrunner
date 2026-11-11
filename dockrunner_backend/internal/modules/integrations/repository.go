@@ -84,7 +84,7 @@ func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 func (r *Repository) DbUsageGB(ctx context.Context, owner string) float64 {
 	var total float64
 	_ = r.pool.QueryRow(ctx, `SELECT coalesce(sum(size_gb), 0) FROM database_users
-		WHERE owner_login = $1 AND db_type IN ('postgres','mongo','redis')`, owner).Scan(&total)
+		WHERE owner_login = $1 AND db_type IN ('postgres','mongo')`, owner).Scan(&total)
 	return total
 }
 

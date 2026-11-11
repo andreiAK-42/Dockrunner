@@ -49,7 +49,7 @@ export default function Profile() {
       <Box className={styles.grid}>
         <Card>
           <CardContent>
-            <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+            <Stack direction="row" spacing={2} sx={{ alignItems: 'center', mb: 2 }}>
               <Avatar sx={{ width: 56, height: 56 }}>{getInitial(userName)}</Avatar>
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -70,7 +70,7 @@ export default function Profile() {
             <Typography variant="h6" sx={{ fontWeight: 700, mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
               <Crown size={18} /> Тарифный план
             </Typography>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 2 }}>
               <Chip label={TARIFF.name} color="primary" />
               <Typography variant="body2" color="text.secondary">{TARIFF.price}</Typography>
             </Stack>

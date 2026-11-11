@@ -187,7 +187,7 @@ export default function UsersTab({ users, plans, onChanged, onError }: UsersTabP
                 {plans.map((t) => <MenuItem key={t.id} value={t.id}>{t.name} — {t.price}</MenuItem>)}
               </Select>
             </FormControl>
-            <TextField label="Действует до" type="date" value={planExpires} onChange={(e) => setPlanExpires(e.target.value)} InputLabelProps={{ shrink: true }} helperText="Пусто — бессрочно" />
+            <TextField label="Действует до" type="date" value={planExpires} onChange={(e) => setPlanExpires(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} helperText="Пусто — бессрочно" />
           </Stack>
         </DialogContent>
         <DialogActions>
