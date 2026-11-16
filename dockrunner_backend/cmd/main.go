@@ -26,8 +26,8 @@ import (
 	"dockrunner_backend/internal/oplock"
 	"dockrunner_backend/internal/realtime"
 	"dockrunner_backend/internal/router"
-	"dockrunner_backend/pkg/database/influxdb"
 	"dockrunner_backend/pkg/database/postgre"
+	"dockrunner_backend/pkg/database/victoriametrics"
 	"dockrunner_backend/pkg/logger"
 	"dockrunner_backend/pkg/queue"
 )
@@ -46,7 +46,13 @@ func main() {
 		panic(fmt.Sprintf("failed to load config: %v", err))
 	}
 
-	zlog, err := logger.NewWithConfig(logger.Config{Env: cfg.Env, Dir: cfg.LogDir})
+	zlog, err := logger.NewWithConfig(logger.Config{
+		Env:             cfg.Env,
+		Dir:             cfg.LogDir, // fallback-файл, если VictoriaLogs не задана
+		VictoriaLogsURL: cfg.VictoriaLogsURL,
+		VictoriaToken:   cfg.VictoriaLogsToken,
+		Service:         "dockrunner-backend",
+	})
 	if err != nil {
 		panic(fmt.Sprintf("failed to init logger: %v", err))
 	}
@@ -60,7 +66,8 @@ func main() {
 		zap.String("port", cfg.Port),
 		zap.Bool("env_file", cfg.EnvFile),
 		zap.String("postgres", config.RedactURL(cfg.PostgresURL)),
-		zap.String("influxdb", config.RedactURL(cfg.InfluxURL)),
+		zap.String("victoria_metrics", config.RedactURL(cfg.VictoriaMetricsURL)),
+		zap.String("victoria_logs", config.RedactURL(cfg.VictoriaLogsURL)),
 		zap.String("rabbitmq", config.RedactURL(cfg.RabbitURL)),
 		zap.String("log_dir", cfg.LogDir),
 	)
@@ -73,9 +80,12 @@ func main() {
 		defer pg.Close()
 	}
 
-	influxDB := connectInflux(ctx, cfg, zlog)
-	if influxDB != nil {
-		defer influxDB.Close()
+	var metricsClient *victoriametrics.Client
+	if cfg.VictoriaMetricsURL != "" {
+		metricsClient = victoriametrics.New(cfg.VictoriaMetricsURL, cfg.VictoriaMetricsToken, 10*time.Second)
+		if err := metricsClient.Ping(ctx); err != nil {
+			zlog.Warn("victoria metrics not available", zap.Error(err))
+		}
 	}
 
 	ops := oplock.New()
@@ -91,7 +101,7 @@ func main() {
 		Config:            cfg,
 		Logger:            zlog,
 		Postgres:          pg,
-		Influx:            influxDB,
+		Metrics:           metricsClient,
 		Queue:             queueClient,
 		OpTracker:         ops,
 		Realtime:          hub,
@@ -145,27 +155,6 @@ func connectPostgres(ctx context.Context, cfg *config.Config, zlog *zap.Logger) 
 	return pg
 }
 
-// connectInflux подключает InfluxDB для метрик. Без URL или при ошибке — nil.
-func connectInflux(ctx context.Context, cfg *config.Config, zlog *zap.Logger) *influxdb.Client {
-	if cfg.InfluxURL == "" {
-		return nil
-	}
-
-	influxClient, err := influxdb.New(ctx, influxdb.Config{
-		URL:     cfg.InfluxURL,
-		Token:   cfg.InfluxToken,
-		Org:     cfg.InfluxOrg,
-		Bucket:  cfg.InfluxBucket,
-		Timeout: cfg.InfluxTimeout,
-	}, zlog)
-	if err != nil {
-		zlog.Warn("influxdb not available", zap.Error(err))
-		return nil
-	}
-
-	return influxClient
-}
-
 // connectQueue открывает RabbitMQ и объявляет топологию. При ошибке — nil.
 func connectQueue(ctx context.Context, cfg *config.Config, zlog *zap.Logger) *queue.Client {
 	queueClient, err := queue.Dial(ctx, queue.Config{URL: cfg.RabbitURL, TLSSkipVerify: cfg.RabbitTLSSkipVerify}, zlog)
@@ -205,9 +194,29 @@ func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Po
 	}
 
 	adminRepo := admin.NewRepository(pg, zlog)
-	adminService := admin.NewService(adminRepo, queueClient, zlog, ops)
-
 	agentsRepo := agents.NewRepository(pg, zlog)
+
+	// nodeOnline: тот же критерий, что и в containers.Service — heartbeat не старше 2 минут.
+	nodeOnline := func(ctx context.Context, nodeID string) error {
+		list, err := agentsRepo.List(ctx)
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			return nil
+		}
+		for _, a := range list {
+			if a.ID == nodeID {
+				if time.Since(a.LastSeen) > 2*time.Minute {
+					return containers.ErrNodeOffline
+				}
+				return nil
+			}
+		}
+		return containers.ErrUnknownNode
+	}
+
+	adminService := admin.NewService(adminRepo, queueClient, zlog, ops, nodeOnline)
 
 	volumesRepo := volumes.NewRepository(pg, zlog)
 	volumesService := volumes.NewService(volumesRepo, queueClient, zlog)

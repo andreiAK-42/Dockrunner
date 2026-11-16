@@ -77,7 +77,7 @@ export default function LogsTab() {
         <Grid size={{ xs: 12, md: 6 }}>
           <LogServiceCard
             title="VictoriaLogs"
-            description="Централизованное хранение и поиск логов всех контейнеров и сервисов. Поддерживает LogQL, SQL-подобный язык запросов."
+            description="Централизованное хранение и поиск логов всех контейнеров и сервисов."
             url={VICTORIA_LOGS_URL}
             icon={<Terminal size={24} />}
             color="#e67e22"
@@ -86,7 +86,7 @@ export default function LogsTab() {
         <Grid size={{ xs: 12, md: 6 }}>
           <LogServiceCard
             title="VictoriaMetrics"
-            description="Высокопроизводительная система мониторинга и алертинга. Prometheus-совместимый API, MetricsQL для запросов."
+            description="Высокопроизводительная система мониторинга и алертинга."
             url={VICTORIA_METRICS_URL}
             icon={<Activity size={24} />}
             color="#27ae60"

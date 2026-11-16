@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"net/url"
@@ -32,6 +33,13 @@ type Config struct {
 	Heartbeat           time.Duration `yaml:"-"`
 	HeartbeatRaw        yaml.Node     `yaml:"Heartbeat"`
 	AgentIP             string        `yaml:"AgentIP"`
+
+	// Victoria: метрики напрямую в VictoriaMetrics, логи — в VictoriaLogs.
+	// Пустой URL — отправка отключена. Token — Bearer для vmauth (можно пусто
+	// в доверенной сети).
+	VictoriaMetricsURL string `yaml:"VictoriaMetricsURL"`
+	VictoriaLogsURL    string `yaml:"VictoriaLogsURL"`
+	VictoriaToken      string `yaml:"VictoriaToken"`
 
 	City string  `yaml:"-"`
 	Lat  float64 `yaml:"-"`
@@ -65,7 +73,44 @@ func LoadOrCreateConfig() (*Config, error) {
 		return nil, fmt.Errorf("разбор config.yaml: %w", err)
 	}
 	cfg.normalize()
+	cfg.applyEnv()
 	return &cfg, nil
+}
+
+// applyEnv перекрывает поля конфигурации переменными окружения —
+// так контейнеру можно подать готовый env_file вместо правки config.yaml.
+// Пустое значение переменной не перекрывает (можно задать только часть).
+func (c *Config) applyEnv() {
+	override := func(key string, dst *string) {
+		if v := os.Getenv(key); v != "" {
+			*dst = v
+		}
+	}
+	override("AGENT_ID", &c.AgentName)
+	override("AGENT_NAME", &c.AgentName)
+	override("AGENT_DESCRIPTION", &c.AgentDescription)
+	override("AGENT_PUBLIC_URL", &c.AgentPublicURL)
+	override("AGENT_IP", &c.AgentIP)
+	override("CENTRAL_URL", &c.CentralURL)
+	override("AGENT_TOKEN", &c.Token)
+	override("RABBITMQ_URL", &c.RabbitURL)
+	override("SQLITE_PATH", &c.SQLitePath)
+	override("WORKSPACE_DIR", &c.Workspace)
+	override("HOST_WORKSPACE_DIR", &c.HostWorkspace)
+	override("PORT", &c.Port)
+	override("VICTORIA_METRICS_URL", &c.VictoriaMetricsURL)
+	override("VICTORIA_LOGS_URL", &c.VictoriaLogsURL)
+	override("VICTORIA_TOKEN", &c.VictoriaToken)
+	if v := os.Getenv("RABBITMQ_TLS_SKIP_VERIFY"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.RabbitTLSSkipVerify = b
+		}
+	}
+	if v := os.Getenv("HEARTBEAT_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			c.Heartbeat = d
+		}
+	}
 }
 
 func (c *Config) normalize() {
@@ -129,5 +174,9 @@ Workspace: ./workspace
 HostWorkspace: ""
 Port: "8090"
 Heartbeat: 15
+# Victoria Metrics/Logs. Пусто — не отправлять.
+# VictoriaMetricsURL: http://victoria:8428
+# VictoriaLogsURL: http://victoria-logs:9428
+# VictoriaToken: shared-bearer-token
 # AgentIP: "192.168.1.100"  # Укажите IP агента вручную, если нужно переопределить автоопределение
 `

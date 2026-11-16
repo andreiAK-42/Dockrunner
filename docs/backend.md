@@ -1,6 +1,6 @@
 # Центральный сервер (`dockrunner_backend`)
 
-Go + Gin. Хранит пользователей и тарифы, выдаёт JWT, владеет RabbitMQ.
+Go + Gin. Хранит пользователей и тарифы, выдаёт JWT, владеет RabbitMQ. Метрики читает из VictoriaMetrics (пишут их сами агенты), логи шлёт в VictoriaLogs.
 
 ## Запуск
 
@@ -10,12 +10,12 @@ cp .env.example .env   # заполнить секреты
 go run ./cmd/main
 ```
 
-Проверки: `GET /health`, `GET /ready` (статус Postgres/InfluxDB).
+Проверки: `GET /health`, `GET /ready` (статус Postgres/VictoriaMetrics).
 
 Живая документация API — Swagger UI: `http://localhost:8080/swagger/` (генерируется из аннотаций командой `swag init -g cmd/main.go -o docs`).
 
-Инфраструктуру для разработки проще поднять контейнерами:
-`postgres:16` (5432), `influxdb:2` (8086), `rabbitmq:3-management` (5672).
+Инфраструктура для разработки проще поднять контейнерами:
+`postgres:16` (5432), `victoriametrics/victoria-metrics` (8428), `victoriametrics/victoria-logs` (9428), `rabbitmq:3-management` (5672).
 
 ## Основные переменные окружения
 
@@ -23,7 +23,8 @@ go run ./cmd/main
 |---|---|
 | `PORT`, `APP_ENV` | порт и окружение |
 | `POSTGRES_URL` | база данных |
-| `INFLUX_URL`, `INFLUX_TOKEN`, `INFLUX_ORG`, `INFLUX_BUCKET` | метрики |
+| `VICTORIA_METRICS_URL`, `VICTORIA_METRICS_TOKEN` | чтение метрик (пишут агенты; токен — Bearer для vmauth) |
+| `VICTORIA_LOGS_URL`, `VICTORIA_LOGS_TOKEN` | централизованные логи (задан — вместо LOG_DIR/app.log) |
 | `RABBITMQ_URL` | общая шина с агентами |
 | `JWT_SECRET`, `JWT_ACCESS_TTL`, `JWT_REFRESH_TTL`, `BCRYPT_COST` | токены и пароли |
 | `CORS_ALLOWED_ORIGINS` | должен содержать адрес панели |
@@ -96,7 +97,7 @@ go run ./cmd/main
 
 ## Блокировка операций (`internal/oplock`)
 
-Одна операция на приложение (`владелец/приложение`): `check`, `deploy`, `refresh`, `stop/restart/remove`. Повторная попытка, пока идёт первая, — HTTP 409 с текстом «сейчас выполняется операция …». Замок снимается терминальным событием (`deploy.completed/failed`, `op.failed`, `container.*`) или протуханием проверки. Событие `op.failed` от воркера (операция по несуществующему деплою) переводит запись в `error`.
+Одна операция на приложение (`владелец/приложение`): `check`, `deploy`, `refresh`, `stop/restart/remove`. Повторная попытка, пока идёт первая, — HTTP 409 с текстом «сейчас выполняется операция …». Замок снимается терминальным событием (`deploy.completed/failed`, `op.failed`, `container.*`) или протуханием по TTL (15 минут — на случай потерянного события). Событие `op.failed` от воркера (операция по несуществующему деплою) переводит запись в `error`.
 Запись приложения появляется в `/mine` сразу при `POST /run` со статусом `building` — список не пуст, пока идёт сборка; `deploy.completed/failed` переводят её в `running`/`error`.
 
 ## Порты: диапазон и занятость

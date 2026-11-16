@@ -1,4 +1,7 @@
-version: '3.8'
+# Инфраструктура центрального сервера: postgres + rabbitmq + victoria-metrics + victoria-logs.
+# Переменные читаются из .env в корне репозитория (см. .env.example):
+#   cp .env.example .env
+# Запуск: docker compose -f docker-compose-services.yml up -d
 
 services:
   postgres:
@@ -6,9 +9,9 @@ services:
     container_name: postgres
     restart: always
     environment:
-      POSTGRES_USER: dockrunner
-      POSTGRES_PASSWORD: md51d42fb006664faf08d35d18490dc723e
-      POSTGRES_DB: dockrunner
+      POSTGRES_USER: ${POSTGRES_USER:-dockrunner}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dockrunner}
     ports:
       - "5432:5432"
     volumes:
@@ -19,8 +22,8 @@ services:
     container_name: rabbitmq
     restart: always
     environment:
-      RABBITMQ_DEFAULT_USER: dockrunner
-      RABBITMQ_DEFAULT_PASS: md5adaa207dd5294739f8aab13489ffa490
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-dockrunner}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?задайте RABBITMQ_DEFAULT_PASS в .env}
     ports:
       - "5672:5672"   # Порт для подключения приложений
       - "15672:15672" # Панель управления (Management UI)
@@ -30,11 +33,11 @@ services:
       com.datadoghq.ad.logs: '[{"source": "rabbitmq", "service": "rabbitmq"}]'
 
   victorialogs:
-    image: docker.io/victoriametrics/victoria-logs:${VL_VERSION:-v1.53.0}
+    image: docker.io/victoriametrics/victoria-logs:v1.53.0
     restart: unless-stopped
     command:
-      - -storageDataPath=/victoria-logs-data
-      - -retentionPeriod=${RETENTION:-30d}
+      - "-storageDataPath=/victoria-logs-data"
+      - "-retentionPeriod=${RETENTION:-30d}"
     ports:
       - "127.0.0.1:9428:9428"
     volumes:
@@ -49,8 +52,8 @@ services:
       - vm-data:/victoria-metrics-data
     command:
       - "-storageDataPath=/victoria-metrics-data"
-      - "-retentionPeriod=1m"
-      - "-selfScrapeInterval=10s"
+      - "-retentionPeriod=30d"
+      - "-selfScrapeInterval=30s"
     restart: always
 
   caddy:
@@ -59,8 +62,8 @@ services:
     depends_on:
       - victorialogs
     environment:
-      DOMAIN: pi.kemsu.ru
-      TOKEN: 
+      DOMAIN: ${DOMAIN:-example.com}
+      TOKEN: ${VICTORIA_TOKEN:-}
     ports:
       - "80:80"
       - "443:443"
@@ -70,10 +73,10 @@ services:
       - caddy-config:/config
   
 
-  
-
 volumes:
   pgdata:
   rabbitmq_data:
-  influxdb_data:
+  vl-data:
   vm-data:
+  caddy-data:
+  caddy-config:

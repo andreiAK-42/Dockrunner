@@ -5,18 +5,15 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-
-	"dockrunner_backend/pkg/database/influxdb"
 )
 
 type Service struct {
 	repo   *Repository
-	influx *influxdb.Client
 	logger *zap.Logger
 }
 
-func NewService(repo *Repository, influx *influxdb.Client, logger *zap.Logger) *Service {
-	return &Service{repo: repo, influx: influx, logger: logger}
+func NewService(repo *Repository, logger *zap.Logger) *Service {
+	return &Service{repo: repo, logger: logger}
 }
 
 type HeartbeatInput struct {
@@ -77,14 +74,8 @@ func (s *Service) Heartbeat(ctx context.Context, in HeartbeatInput) error {
 	}); err != nil {
 		return err
 	}
-	if s.influx != nil {
-		_ = s.influx.WriteServerMetrics(ctx, influxdb.ServerMetrics{
-			ServerID: in.AgentID,
-			CPU:      in.CPUPercent,
-			MemUsed:  in.MemUsedGB,
-			MemTotal: in.MemTotalGB,
-		})
-	}
+	// Метрики узла агент пишет сам напрямую в VictoriaMetrics —
+	// здесь heartbeat только обновляет Postgres.
 	return s.repo.ReplaceStorage(ctx, in.AgentID, in.Storage)
 }
 

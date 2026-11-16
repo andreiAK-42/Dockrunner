@@ -26,6 +26,7 @@ import (
 	"dockrunner_agent/internal/docker"
 	"dockrunner_agent/internal/fsx"
 	"dockrunner_agent/internal/store"
+	"dockrunner_agent/internal/victoria"
 )
 
 type UserStorage struct {
@@ -348,13 +349,22 @@ func (e *statusError) Error() string {
 	return "heartbeat rejected: " + http.StatusText(e.code)
 }
 
-func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, hostname string, db *sql.DB, dock *docker.Client) {
+func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, hostname string, db *sql.DB, dock *docker.Client, metrics *victoria.MetricsWriter) {
 	// Send the first heartbeat immediately so the central server receives the
 	// IP/location detected during agent startup without waiting one full interval.
 	send := func() {
 		report, err := Collect(ctx, db, dock, cfg, hostname)
 		if err != nil {
 			logger.Warn("heartbeat metrics collection failed", "error", err)
+		}
+		if metrics != nil {
+			line := victoria.NodeMetricsLine(report.AgentID, hostname,
+				report.CPUPercent, report.MemUsedGB, report.MemTotalGB,
+				report.DiskUsedGB, report.DiskTotalGB, report.Containers,
+				report.NetDownMbps, report.NetUpMbps)
+			if err := metrics.Write(ctx, line); err != nil {
+				logger.Warn("victoria metrics write failed", "error", err)
+			}
 		}
 		if err := sendOnce(ctx, cfg.CentralURL, cfg.Token, report); err != nil {
 			logger.Warn("heartbeat failed", "error", err)

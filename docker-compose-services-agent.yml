@@ -1,0 +1,31 @@
+# Агент воркера — ставится на КАЖДЫЙ сервер, где разворачиваются приложения.
+#
+# ЗАПУСК:
+#   1) cp env.agent.example env.agent          # заполнить AGENT_TOKEN, CENTRAL_URL, RABBITMQ_URL, VICTORIA_*
+#   2) docker compose -f docker-compose-services-agent.yml up -d --build
+#
+# Требования: Docker на хосте (сокет проброшен в контейнер), доступность
+# центральной RabbitMQ и центрального бэкенда из этой машины.
+# Состояние (SQLite, workspace с клонами репозиториев) — в volume agent-data.
+# AGENT_ID должен быть уникальным на каждом воркере.
+
+services:
+  agent:
+    build: ./dockrunner_agent
+    container_name: dockrunner-agent
+    restart: unless-stopped
+    # Все настройки агента — из env.agent (переменные окружения
+    # перекрывают значения config.yaml в образе).
+    env_file:
+      - env.agent
+    volumes:
+      # Управление docker-демоном хоста
+      - /var/run/docker.sock:/var/run/docker.sock
+      # SQLite + workspace (<owner>/<project> клоны) — /data внутри контейнера
+      - agent-data:/data
+    ports:
+      # HTTP API агента: логи, файлы, спека (панель ходит сюда напрямую)
+      - "8090:8090"
+
+volumes:
+  agent-data:

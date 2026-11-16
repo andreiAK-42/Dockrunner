@@ -1,9 +1,16 @@
-# Общий стенд: postgres + rabbitmq + influxdb + backend + frontend.
+# Общий стенд: backend + frontend.
+# Инфраструктура (postgres, rabbitmq, victoria-metrics, victoria-logs) поднимается
+# отдельно из docker-compose-services.yml — в той же docker-сети/на той же машине.
 # Агент на этом стенде НЕ поднимается: ему нужен docker-сокет хоста,
-# поэтому агент ставится отдельно на каждый сервер (см. dockrunner_agent/DEPLOY.md).
+# поэтому агент ставится отдельно на каждый сервер
+# (см. docker-compose-services-agent.yml и dockrunner_agent/DEPLOY.md).
 #
-# Запуск: docker compose up -d --build
-# Пересборка фронта с другим API: VITE_API_URL=https://api.example.com docker compose up -d --build frontend
+# Запуск:
+#   cp .env.example .env        # заполнить секреты
+#   docker compose up -d --build
+#
+# Пересборка фронта с другим API: поменять VITE_API_URL в .env и:
+#   docker compose up -d --build frontend
 
 services:
   backend:
@@ -11,30 +18,15 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    environment:
-      APP_ENV: production
-      PORT: 8080
-      POSTGRES_URL: postgres://dockrunner:dockrunner@postgres:5432/dockrunner?sslmode=disable
-      RABBITMQ_URL: amqp://dockrunner:dockrunner@rabbitmq:5672/
-      INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: dockrunner-influx-token
-      INFLUX_ORG: dockrunner
-      INFLUX_BUCKET: metrics
-      JWT_SECRET: change-me-super-secret-key-32-chars-min-32
-      AGENT_TOKEN: change-me-agent-shared-secret
-      ADMIN_LOGIN: admin
-      ADMIN_PASSWORD: admin123
-      # ВАЖНО: сюда должен входить адрес, с которого открываешь панель
-      # (иначе браузер заблокирует запросы CORS). Задаётся через .env рядом
-      # с compose: CORS_ALLOWED_ORIGINS=http://82.179.9.27
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://localhost:5173}
-      PORTS_MIN: 3000
-      PORTS_MAX: 4000
+    # Все настройки бэкенда — из .env (секреты не зашиты в compose).
+    env_file:
+      - .env
 
   frontend:
     build:
       context: ./dockrunner
       args:
+        # URL бэкенда вшивается в сборку на этапе build — менять только через .env + rebuild.
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
     restart: unless-stopped
     ports:

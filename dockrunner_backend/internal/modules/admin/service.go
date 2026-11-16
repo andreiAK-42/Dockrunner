@@ -33,13 +33,16 @@ type Service struct {
 	queue  *queue.Client
 	logger *zap.Logger
 	ops    *oplock.Tracker
+	// nodeOnline проверяет, что воркер шлёт heartbeat, перед публикацией задачи.
+	// Не задана — задача публикуется без проверки.
+	nodeOnline func(ctx context.Context, nodeID string) error
 }
 
-func NewService(repo *Repository, queue *queue.Client, logger *zap.Logger, ops *oplock.Tracker) *Service {
+func NewService(repo *Repository, queue *queue.Client, logger *zap.Logger, ops *oplock.Tracker, nodeOnline func(ctx context.Context, nodeID string) error) *Service {
 	if ops == nil {
 		ops = &oplock.Tracker{}
 	}
-	return &Service{repo: repo, queue: queue, logger: logger, ops: ops}
+	return &Service{repo: repo, queue: queue, logger: logger, ops: ops, nodeOnline: nodeOnline}
 }
 
 func (s *Service) Plans() []Plan {
@@ -66,6 +69,11 @@ func (s *Service) ContainerAction(ctx context.Context, id, action string) error 
 	rec, err := s.repo.GetContainer(ctx, id)
 	if err != nil {
 		return err
+	}
+	if s.nodeOnline != nil {
+		if err := s.nodeOnline(ctx, rec.NodeID); err != nil {
+			return err
+		}
 	}
 	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, action); err != nil {
 		return err

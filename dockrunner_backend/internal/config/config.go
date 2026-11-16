@@ -31,12 +31,13 @@ type Config struct {
 	PostgresMaxConnIdle time.Duration
 	PostgresHealthCheck time.Duration
 
-	// InfluxDB (metrics / time-series)
-	InfluxURL     string
-	InfluxToken   string
-	InfluxOrg     string
-	InfluxBucket  string
-	InfluxTimeout time.Duration
+	// VictoriaMetrics (time-series, read-only: пишут сами агенты)
+	VictoriaMetricsURL   string
+	VictoriaMetricsToken string
+
+	// VictoriaLogs (централизованные логи)
+	VictoriaLogsURL   string
+	VictoriaLogsToken string
 
 	// RabbitMQ (async tasks)
 	RabbitURL           string
@@ -105,11 +106,10 @@ func Load() (*Config, error) {
 		PostgresMaxConnIdle: getDuration("POSTGRES_MAX_CONN_IDLE", 5*time.Minute),
 		PostgresHealthCheck: getDuration("POSTGRES_HEALTH_CHECK_PERIOD", 1*time.Minute),
 
-		InfluxURL:     getEnv("INFLUX_URL", "http://localhost:8086"),
-		InfluxToken:   getEnv("INFLUX_TOKEN", "dockrunner-influx-token"),
-		InfluxOrg:     getEnv("INFLUX_ORG", "dockrunner"),
-		InfluxBucket:  getEnv("INFLUX_BUCKET", "metrics"),
-		InfluxTimeout: getDuration("INFLUX_TIMEOUT", 5*time.Second),
+		VictoriaMetricsURL:   getEnv("VICTORIA_METRICS_URL", ""),
+		VictoriaMetricsToken: getEnv("VICTORIA_METRICS_TOKEN", ""),
+		VictoriaLogsURL:      getEnv("VICTORIA_LOGS_URL", ""),
+		VictoriaLogsToken:    getEnv("VICTORIA_LOGS_TOKEN", ""),
 
 		RabbitURL:           getEnv("RABBITMQ_URL", "amqp://dockrunner:dockrunner@localhost:5672/"),
 		RabbitTLSSkipVerify: getBool("RABBITMQ_TLS_SKIP_VERIFY", false),

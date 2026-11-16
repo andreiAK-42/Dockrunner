@@ -37,39 +37,29 @@ import {
   BookOpen,
   Palette,
   User,
-  ShieldCheck,
   Users,
   Server,
   Terminal,
-  DollarSign,
+  RussianRuble,
   CreditCard,
 } from 'lucide-react';
 
 export const NAVIGATION: NavItem[] = [
   // ── Главные разделы (видно пользователям и админам) ──
   { key: 'dashboard',       label: 'Статистика',        icon: <LayoutDashboard size={20} />,   path: '/dashboard',           roles: ['user'] },
-  { key: 'applications',    label: 'Приложения',        icon: <BoxIcon size={20} />,           path: '/applications',        roles: ['user', 'admin'] },
+  { key: 'applications',    label: 'Приложения',        icon: <BoxIcon size={20} />,           path: '/applications',        roles: ['user'] },
   { key: 'env-configs',     label: 'Конфигурации .env', icon: <FileCode2 size={20} />,         path: '/env-configs',         roles: ['user'] },
   { key: 'integrations',    label: 'Интеграции',        icon: <Puzzle size={20} />,            path: '/integrations',        roles: ['user', 'admin'] },
   { key: 'files',           label: 'Файлы',             icon: <FolderOpen size={20} />,        path: '/files',               roles: ['user', 'admin'] },
 
-  // ── Админ-секция (только админы) ──
-  {
-    key: 'admin-section',
-    label: 'Администрирование',
-    icon: <ShieldCheck size={20} />,
-    roles: ['admin'],
-    path: '/admin',
-    children: [
-      { key: 'admin-users',      label: 'Пользователи',  icon: <Users size={20} />,   path: '/admin', hash: '#users',      roles: ['admin'] },
-      { key: 'admin-containers', label: 'Контейнеры',    icon: <BoxIcon size={20} />, path: '/admin', hash: '#containers', roles: ['admin'] },
-      { key: 'admin-nodes',      label: 'Серверы',       icon: <Server size={20} />,  path: '/admin', hash: '#servers',  roles: ['admin'] },
-      { key: 'admin-requests',   label: 'Заявки',        icon: <FileClock size={20} />, path: '/admin', hash: '#requests', roles: ['admin'] },
-      { key: 'admin-logs',       label: 'Логи',          icon: <Terminal size={20} />, path: '/admin', hash: '#logs',     roles: ['admin'] },
-      { key: 'admin-pricing',    label: 'Тарифы',        icon: <DollarSign size={20} />, path: '/admin', hash: '#pricing',  roles: ['admin'] },
-      { key: 'admin-balances',   label: 'Балансы',       icon: <CreditCard size={20} />, path: '/admin', hash: '#balances', roles: ['admin'] },
-    ]
-  },
+  // ── Админ-панели (только админы, теперь в основном меню без раскрывающегося списка) ──
+  { key: 'admin-users',      label: 'Пользователи',  icon: <Users size={20} />,   path: '/admin', hash: '#users',      roles: ['admin'] },
+  { key: 'admin-containers', label: 'Контейнеры',    icon: <BoxIcon size={20} />, path: '/admin', hash: '#containers', roles: ['admin'] },
+  { key: 'admin-nodes',      label: 'Серверы',       icon: <Server size={20} />,  path: '/admin', hash: '#servers',  roles: ['admin'] },
+  { key: 'admin-requests',   label: 'Заявки',        icon: <FileClock size={20} />, path: '/admin', hash: '#requests', roles: ['admin'] },
+  { key: 'admin-logs',       label: 'Логи',          icon: <Terminal size={20} />, path: '/admin', hash: '#logs',     roles: ['admin'] },
+  { key: 'admin-pricing',    label: 'Тарифы',        icon: <RussianRuble size={20} />, path: '/admin', hash: '#pricing',  roles: ['admin'] },
+  { key: 'admin-balances',   label: 'Балансы',       icon: <CreditCard size={20} />, path: '/admin', hash: '#balances', roles: ['admin'] },
 
   // ── Профиль / настройки (видно всем, но не в меню админа) ──
   { key: 'docs',         label: 'Документация',   icon: <BookOpen size={20} />,   path: '/docs',          roles: ['user'] },

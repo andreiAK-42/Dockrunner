@@ -29,7 +29,7 @@ import (
 	"dockrunner_backend/internal/modules/volumes"
 	"dockrunner_backend/internal/oplock"
 	"dockrunner_backend/internal/realtime"
-	"dockrunner_backend/pkg/database/influxdb"
+	"dockrunner_backend/pkg/database/victoriametrics"
 	"dockrunner_backend/pkg/queue"
 	"dockrunner_backend/pkg/token"
 
@@ -43,7 +43,7 @@ type Dependencies struct {
 	Config   *config.Config
 	Logger   *zap.Logger
 	Postgres *pgxpool.Pool
-	Influx   *influxdb.Client
+	Metrics  *victoriametrics.Client
 	Queue    *queue.Client
 	// Shared instances built in main and also used by the events consumer.
 	// If nil, the router builds local ones (dev mode without task results).
@@ -64,11 +64,11 @@ func postgresReady(deps Dependencies, ctx context.Context) bool {
 	return deps.Postgres.Ping(ctx) == nil
 }
 
-func influxReady(deps Dependencies, ctx context.Context) bool {
-	if deps.Influx == nil {
+func metricsReady(deps Dependencies, ctx context.Context) bool {
+	if deps.Metrics == nil {
 		return true
 	}
-	return deps.Influx.Ping(ctx) == nil
+	return deps.Metrics.Ping(ctx) == nil
 }
 
 func New(deps Dependencies) *gin.Engine {
@@ -103,14 +103,14 @@ func New(deps Dependencies) *gin.Engine {
 	r.GET("/ready", func(c *gin.Context) {
 		ctx := c.Request.Context()
 		pgOK := postgresReady(deps, ctx)
-		influxOK := influxReady(deps, ctx)
-		ready := pgOK && influxOK
+		metricsOK := metricsReady(deps, ctx)
+		ready := pgOK && metricsOK
 
 		status := http.StatusOK
 		if !ready {
 			status = http.StatusServiceUnavailable
 		}
-		c.JSON(status, gin.H{"ready": ready, "postgres": pgOK, "influxdb": influxOK})
+		c.JSON(status, gin.H{"ready": ready, "postgres": pgOK, "victoria_metrics": metricsOK})
 	})
 
 	api := r.Group("/api")
@@ -143,7 +143,7 @@ func New(deps Dependencies) *gin.Engine {
 	adminRepo := admin.NewRepository(deps.Postgres, deps.Logger)
 	adminService := deps.AdminService
 	if adminService == nil {
-		adminService = admin.NewService(adminRepo, deps.Queue, deps.Logger, deps.OpTracker)
+		adminService = admin.NewService(adminRepo, deps.Queue, deps.Logger, deps.OpTracker, nil)
 	}
 	adminHandler := admin.NewHandler(adminService, deps.Logger)
 	admin.RegisterRoutes(v1, adminHandler, deps.Config.JWTSecret)
@@ -156,12 +156,12 @@ func New(deps Dependencies) *gin.Engine {
 
 	// --- Agents (worker heartbeats) ---
 	agentsRepo := agents.NewRepository(deps.Postgres, deps.Logger)
-	agentsService := agents.NewService(agentsRepo, deps.Influx, deps.Logger)
+	agentsService := agents.NewService(agentsRepo, deps.Logger)
 	agentsHandler := agents.NewHandler(agentsService, deps.Logger)
 	agents.RegisterRoutes(v1, agentsHandler, deps.Config.JWTSecret, deps.Config.AgentToken)
 
 	// --- Overview (cluster stats) ---
-	overviewHandler := overview.NewHandler(deps.Influx, deps.Logger)
+	overviewHandler := overview.NewHandler(deps.Metrics, deps.Logger)
 	overview.RegisterRoutes(v1, overviewHandler, deps.Config.JWTSecret)
 
 	// --- Volumes ---

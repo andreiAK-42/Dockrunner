@@ -6,17 +6,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"dockrunner_backend/pkg/database/influxdb"
+	"dockrunner_backend/pkg/database/victoriametrics"
 	"dockrunner_backend/pkg/response"
 )
 
 type Handler struct {
-	influx *influxdb.Client
-	logger *zap.Logger
+	metrics *victoriametrics.Client
+	logger  *zap.Logger
 }
 
-func NewHandler(influx *influxdb.Client, logger *zap.Logger) *Handler {
-	return &Handler{influx: influx, logger: logger}
+func NewHandler(metrics *victoriametrics.Client, logger *zap.Logger) *Handler {
+	return &Handler{metrics: metrics, logger: logger}
 }
 
 // Resources godoc
@@ -25,22 +25,22 @@ func NewHandler(influx *influxdb.Client, logger *zap.Logger) *Handler {
 // @Produce json
 // @Security BearerAuth
 // @Param days query int false "Число дней" default(14)
-// @Success 200 {object} response.Success{data=[]influxdb.DailyPoint}
+// @Success 200 {object} response.Success{data=[]victoriametrics.DailyPoint}
 // @Router /api/v1/overview/resources [get]
 func (h *Handler) Resources(c *gin.Context) {
 	days := parseDays(c.Query("days"))
-	if h.influx == nil {
-		response.OK(c, []influxdb.DailyPoint{})
+	if h.metrics == nil {
+		response.OK(c, []victoriametrics.DailyPoint{})
 		return
 	}
-	points, err := h.influx.QueryClusterDaily(c.Request.Context(), days)
+	points, err := h.metrics.QueryClusterDaily(c.Request.Context(), days)
 	if err != nil {
 		h.logger.Warn("resources query failed", zap.Error(err))
-		response.OK(c, []influxdb.DailyPoint{})
+		response.OK(c, []victoriametrics.DailyPoint{})
 		return
 	}
 	if points == nil {
-		points = []influxdb.DailyPoint{}
+		points = []victoriametrics.DailyPoint{}
 	}
 	response.OK(c, points)
 }

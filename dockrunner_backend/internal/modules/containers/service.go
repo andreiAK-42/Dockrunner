@@ -883,6 +883,11 @@ func (s *Service) containerOp(ctx context.Context, owner, id, action string) err
 	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
 		return ErrNotFound
 	}
+	// Без проверки узла задача ушла бы в очередь молчаливого воркера,
+	// а замок снялся бы только по TTL — удаление «висло» бы минутами.
+	if err := s.requireOnlineNode(ctx, rec.NodeID); err != nil {
+		return err
+	}
 	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, action); err != nil {
 		return err
 	}
@@ -1185,21 +1190,19 @@ func (s *Service) checkDiskUsage(ctx context.Context, gracePercent float64) {
 			continue
 		}
 
-		// Build map of container ID -> size
+		// Build map of deployment ID -> size (агент уже сопоставил
+		// docker container ID с deployment ID).
 		sizeMap := make(map[string]int64)
 		for _, sz := range sizes {
-			sizeMap[sz.ContainerID] = sz.SizeBytes
+			if sz.DeploymentID != "" && sz.DeploymentID != "unknown" {
+				sizeMap[sz.DeploymentID] = sz.SizeBytes
+			}
 		}
 
 		// Check each container
 		for _, rec := range nodeContainers {
-			// Find the container ID in the agent's list
-			// The record ID is the deployment ID, but we need the Docker container ID
-			// We'll need to look it up from the agent or store it
-			// For now, we use the record ID as deployment ID and match with agent's deployment_id
 			sizeBytes := sizeMap[rec.ID]
 			if sizeBytes == 0 {
-				// Try to find by container name or check if it's a service container
 				continue
 			}
 

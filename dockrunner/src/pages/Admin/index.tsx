@@ -135,9 +135,6 @@ export default function Admin() {
 
   return (
     <Box className={styles.page}>
-      <Box className={styles.header}>
-        <Typography variant="h4" className={styles.header__title}>Администрирование</Typography>
-      </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
 

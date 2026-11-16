@@ -20,6 +20,7 @@ import (
 	"dockrunner_agent/internal/logs"
 	"dockrunner_agent/internal/queue"
 	"dockrunner_agent/internal/store"
+	"dockrunner_agent/internal/victoria"
 	"dockrunner_agent/internal/worker"
 )
 
@@ -33,7 +34,15 @@ func main() {
 		slog.Error("load config failed", "error", err)
 		os.Exit(1)
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logHandler := slog.Handler(slog.NewTextHandler(os.Stdout, nil))
+	var vlogHandler *victoria.LogHandler
+	if cfg.VictoriaLogsURL != "" {
+		hostname, _ := os.Hostname()
+		vlogHandler = victoria.NewLogHandler(cfg.VictoriaLogsURL, cfg.VictoriaToken,
+			"dockrunner-agent", "worker", hostname, slog.LevelInfo, 5*time.Second, slog.Default())
+		logHandler = victoria.NewMultiHandler(logHandler, vlogHandler)
+	}
+	logger := slog.New(logHandler)
 
 	logger.Info("starting dockrunner agent",
 		"version", config.Version,
@@ -93,7 +102,11 @@ func main() {
 	}
 
 	hostname, _ := os.Hostname()
-	go heartbeat.Start(ctx, logger, cfg, hostname, db, dockCli)
+	var metricsWriter *victoria.MetricsWriter
+	if cfg.VictoriaMetricsURL != "" {
+		metricsWriter = victoria.NewMetricsWriter(cfg.VictoriaMetricsURL, cfg.VictoriaToken, 5*time.Second, logger)
+	}
+	go heartbeat.Start(ctx, logger, cfg, hostname, db, dockCli, metricsWriter)
 
 	apiSrv := api.New(cfg, db, dockCli, streamer, builds, logger.Info)
 	httpSrv := &http.Server{
@@ -120,6 +133,9 @@ func main() {
 		logger.Error("api shutdown failed", "error", err)
 	}
 	streamer.Stop()
+	if vlogHandler != nil {
+		vlogHandler.Close()
+	}
 	logger.Info("agent exited")
 }
 

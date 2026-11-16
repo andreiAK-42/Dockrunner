@@ -178,18 +178,22 @@ func (h *Handler) lockApp(task Task) func() {
 	}
 }
 
-func (h *Handler) publishEvent(ctx context.Context, event Event) {
+// publishEvent отправляет событие в очередь events. Ошибка возвращается
+// вызывающему: терминальное событие (container.removed и т.п.) обязано
+// доехать до централи, иначе та ждёт его бесконечно — лучше перепопытка.
+func (h *Handler) publishEvent(ctx context.Context, event Event) error {
 	if h.queue == nil {
-		return
+		return errors.New("queue unavailable")
 	}
 	event.AgentID = h.agentID
 	event.Time = time.Now().UTC().Format(time.RFC3339)
 	body, _ := json.Marshal(event)
 	if err := h.queue.Publish(ctx, queue.QueueEvents, body); err != nil {
-		h.logger.Warn("publish event failed", "error", err)
-		return
+		h.logger.Warn("publish event failed", "type", event.Type, "deployment", event.DeploymentID, "error", err)
+		return err
 	}
 	h.logger.Info("event published", "type", event.Type, "deployment", event.DeploymentID)
+	return nil
 }
 
 func (h *Handler) Handle(ctx context.Context, msg amqp.Delivery) error {
@@ -292,9 +296,13 @@ func appEvent(eventType string, task Task, msg string) Event {
 
 // missingDeployment reports an operation on an unknown local deployment:
 // no retry will fix it, so the task is dropped after notifying central.
+// Если само уведомление не ушло — возвращаем ошибку: лучше перепопытка,
+// чем молчаливый ответ, после которого централь ждёт событие вечно.
 func (h *Handler) missingDeployment(ctx context.Context, task Task, what string) error {
 	h.logger.Warn("unknown local deployment", "type", task.Type, "deployment", task.DeploymentID)
-	h.publishEvent(ctx, appEvent("op.failed", task, what+": развёртывание не найдено на узле — сначала запустите приложение"))
+	if err := h.publishEvent(ctx, appEvent("op.failed", task, what+": развёртывание не найдено на узле — сначала запустите приложение")); err != nil {
+		return err
+	}
 	return queue.Permanent(store.ErrNoDeployment)
 }
 
@@ -362,7 +370,7 @@ func (h *Handler) projectDir(task Task) (string, error) {
 
 func (h *Handler) prepare(ctx context.Context, task Task) error {
 	fail := func(msg string) {
-		h.publishEvent(ctx, Event{Type: "prepare.failed", AppID: task.AppID, AppName: task.AppName, DeploymentID: task.DeploymentID, Message: msg})
+		_ = h.publishEvent(ctx, Event{Type: "prepare.failed", AppID: task.AppID, AppName: task.AppName, DeploymentID: task.DeploymentID, Message: msg})
 	}
 	dir, err := h.projectDir(task)
 	if err != nil {
@@ -431,7 +439,7 @@ func (h *Handler) prepare(ctx context.Context, task Task) error {
 	// Detect branches (local after clone)
 	branches, _ := git.ListLocalBranches(dir)
 
-	h.publishEvent(ctx, Event{
+	return h.publishEvent(ctx, Event{
 		Type:               "prepare.completed",
 		AppID:              task.AppID,
 		AppName:            task.AppName,
@@ -444,7 +452,6 @@ func (h *Handler) prepare(ctx context.Context, task Task) error {
 		DetectedPorts:      detectedPorts,
 		Message:            "проект готов к сборке",
 	})
-	return nil
 }
 
 // pullImage тянет готовый образ. Пустая ссылка — ошибка: деплоить нечего.
@@ -494,7 +501,7 @@ func (h *Handler) failChild(ctx context.Context, task Task, parentApp, deploymen
 	ev.DeploymentID = deploymentID
 	ev.AppName = appName
 	ev.ParentApp = parentApp
-	h.publishEvent(ctx, ev)
+	_ = h.publishEvent(ctx, ev)
 	return err
 }
 
@@ -544,7 +551,7 @@ func (h *Handler) resolveVolumes(task Task) ([]docker.VolumeMount, error) {
 
 // failDeploy уведомляет центр о провале и возвращает ошибку дальше.
 func (h *Handler) failDeploy(ctx context.Context, task Task, message string, err error) error {
-	h.publishEvent(ctx, appEvent("deploy.failed", task, message))
+	_ = h.publishEvent(ctx, appEvent("deploy.failed", task, message))
 	return err
 }
 
@@ -680,7 +687,9 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 	ev.Image = image
 	ev.Ports = ports
 	ev.ParentApp = parentApp
-	h.publishEvent(ctx, ev)
+	if err := h.publishEvent(ctx, ev); err != nil {
+		return err
+	}
 
 	if h.onReady != nil {
 		h.onReady(containerID, name)
@@ -818,16 +827,27 @@ func (h *Handler) stop(ctx context.Context, task Task) error {
 		return err
 	}
 	if err := h.dock.Stop(ctx, dep.Container); err != nil {
+		if docker.IsMissing(err) {
+			// Контейнера уже нет — цель достигнута, сообщаем как остановку.
+			_ = store.UpdateDeploymentStatus(h.db, task.DeploymentID, "stopped", dep.Container)
+			return h.publishStopped(ctx, task, dep)
+		}
 		h.logger.Warn("stop failed", "deployment", task.DeploymentID, "error", err)
-		h.publishEvent(ctx, appEvent("op.failed", task, "остановка не удалась: "+err.Error()))
+		_ = h.publishEvent(ctx, appEvent("op.failed", task, "остановка не удалась: "+err.Error()))
 		return queue.Permanent(err)
 	}
 	_ = store.UpdateDeploymentStatus(h.db, task.DeploymentID, "stopped", dep.Container)
-	h.publishEvent(ctx, appEvent("container.stopped", task, "приложение остановлено"))
+	return h.publishStopped(ctx, task, dep)
+}
+
+// publishStopped шлёт container.stopped и вызывает detach логов.
+// Ошибка публикации означает, что централь не узнает об остановке.
+func (h *Handler) publishStopped(ctx context.Context, task Task, dep *store.Deployment) error {
+	err := h.publishEvent(ctx, appEvent("container.stopped", task, "приложение остановлено"))
 	if h.onStopped != nil {
 		h.onStopped(dep.Container)
 	}
-	return nil
+	return err
 }
 
 func (h *Handler) restart(ctx context.Context, task Task) error {
@@ -836,13 +856,17 @@ func (h *Handler) restart(ctx context.Context, task Task) error {
 		return err
 	}
 	if err := h.dock.Restart(ctx, dep.Container); err != nil {
+		if docker.IsMissing(err) {
+			// Контейнер исчез (удалён вручную и т.п.) — restart не имеет смысла.
+			_ = store.UpdateDeploymentStatus(h.db, task.DeploymentID, "stopped", dep.Container)
+			return h.publishEvent(ctx, appEvent("container.stopped", task, "контейнер не найден на узле — приложение остановлено"))
+		}
 		h.logger.Warn("restart failed", "deployment", task.DeploymentID, "error", err)
-		h.publishEvent(ctx, appEvent("op.failed", task, "перезапуск не удался: "+err.Error()))
+		_ = h.publishEvent(ctx, appEvent("op.failed", task, "перезапуск не удался: "+err.Error()))
 		return queue.Permanent(err)
 	}
 	_ = store.UpdateDeploymentStatus(h.db, task.DeploymentID, "running", dep.Container)
-	h.publishEvent(ctx, appEvent("container.restarted", task, "приложение перезапущено"))
-	return nil
+	return h.publishEvent(ctx, appEvent("container.restarted", task, "приложение перезапущено"))
 }
 
 func (h *Handler) remove(ctx context.Context, task Task) error {
@@ -852,14 +876,13 @@ func (h *Handler) remove(ctx context.Context, task Task) error {
 			// Idempotent delete: nothing stored locally means there is
 			// nothing to stop — report success so central drops the record.
 			h.logger.Info("remove of unknown deployment, treating as done", "deployment", task.DeploymentID)
-			h.publishEvent(ctx, appEvent("container.removed", task, "приложение удалено"))
-			return nil
+			return h.publishEvent(ctx, appEvent("container.removed", task, "приложение удалено"))
 		}
 		return err
 	}
 	if err := h.dock.Remove(ctx, dep.Container); err != nil && !docker.IsMissing(err) {
 		h.logger.Warn("remove failed", "deployment", task.DeploymentID, "error", err)
-		h.publishEvent(ctx, appEvent("op.failed", task, "удаление не удалось: "+err.Error()))
+		_ = h.publishEvent(ctx, appEvent("op.failed", task, "удаление не удалось: "+err.Error()))
 		return queue.Permanent(err)
 	}
 	_ = store.DeleteDeployment(h.db, task.DeploymentID)
@@ -874,11 +897,12 @@ func (h *Handler) remove(ctx context.Context, task Task) error {
 		}
 	}
 
-	h.publishEvent(ctx, appEvent("container.removed", task, "приложение удалено"))
 	if h.onStopped != nil {
 		h.onStopped(dep.Container)
 	}
-	return nil
+	// Терминальное событие обязано уйти — иначе централь хранит запись
+	// и держит операционный замок до TTL.
+	return h.publishEvent(ctx, appEvent("container.removed", task, "приложение удалено"))
 }
 
 func (h *Handler) volumeRemove(ctx context.Context, task Task) error {
@@ -891,10 +915,10 @@ func (h *Handler) volumeRemove(ctx context.Context, task Task) error {
 
 func (h *Handler) reboot(ctx context.Context) error {
 	if !canReboot() {
-		h.publishEvent(ctx, Event{Type: "server.reboot_failed", Message: "перезагрузка не поддерживается"})
+		_ = h.publishEvent(ctx, Event{Type: "server.reboot_failed", Message: "перезагрузка не поддерживается"})
 		return errRebootUnsupported
 	}
-	h.publishEvent(ctx, Event{Type: "server.rebooting", Message: "сервер перезагружается"})
+	_ = h.publishEvent(ctx, Event{Type: "server.rebooting", Message: "сервер перезагружается"})
 	go delayedReboot(h.logger)
 	return nil
 }
