@@ -710,7 +710,7 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 	}
 	h.logger.Info("deploy completed", "deployment", deploymentID, "container", containerID)
 
-	_ = store.SaveDeployment(h.db, store.Deployment{
+	if err := store.SaveDeployment(h.db, store.Deployment{
 		ID:        deploymentID,
 		AppID:     task.AppID,
 		AppName:   appName,
@@ -729,7 +729,12 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		ParentApp: parentApp,
 		Service:   service,
 		Branch:    task.Branch,
-	})
+	}); err != nil {
+		// Без записи в SQLite центр не сможет получить spec/логи/статус —
+		// лучше громко упасть, чем молча потерять деплой.
+		h.logger.Error("deployment record not saved", "deployment", deploymentID, "error", err)
+		return h.failChild(ctx, task, parentApp, deploymentID, appName, "запись деплоя не сохранена: "+err.Error(), err)
+	}
 
 	ev := appEvent("deploy.completed", task, "приложение запущено")
 	ev.DeploymentID = deploymentID

@@ -1,5 +1,5 @@
 import { Box, Card, CardContent, Alert, Snackbar, Stack, Typography, Grid, Tooltip, Chip, Button } from '@mui/material'
-import { Terminal, Box as BoxIcon, Server, Activity, AlertCircle, Copy } from 'lucide-react'
+import { Terminal, Box as BoxIcon, Server, Activity, Copy } from 'lucide-react'
 import ContainerTabs from './ContainerTabs'
 import ContainerHeader from './ContainerHeader'
 import ContainerActions from './ContainerActions'
@@ -151,7 +151,6 @@ export default function ContainerDetailBase({
       {updateMsg && <Alert severity={updateMsg.ok ? 'success' : 'error'}>{updateMsg.text}</Alert>}
       <Snackbar open={!!syncError} autoHideDuration={6000} onClose={() => showMessage(false, '')}>
         <Alert severity="error" onClose={() => showMessage(false, '')} sx={{ flexGrow: 1 }}>
-          <AlertCircle size={18} style={{ marginRight: 8 }} />
           {syncError}
         </Alert>
       </Snackbar>

@@ -151,7 +151,7 @@ func now() string {
 func SaveDeployment(db *sql.DB, d Deployment) error {
 	_, err := db.Exec(`INSERT INTO deployments
 		(id, app_id, app_name, owner, repo_url, name, image, container, status, ports, volumes, env, cpu_cores, memory_gb, disk_gb, parent_id, parent_app, service, branch, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 		app_name=excluded.app_name, owner=excluded.owner, repo_url=excluded.repo_url,
 		name=excluded.name, image=excluded.image, container=excluded.container,

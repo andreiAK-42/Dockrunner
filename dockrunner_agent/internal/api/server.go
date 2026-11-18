@@ -192,10 +192,12 @@ func (s *Server) recoverDeployment(ctx context.Context, id, appName, owner strin
 		containerID, err = s.dock.FindIDByApp(ctx, appName, owner)
 	}
 	if err != nil || containerID == "" {
+		s.logger("recovery: container not found", "deployment", id, "app", appName, "error", err)
 		return nil
 	}
 	live, err := s.dock.InspectSpec(ctx, containerID)
 	if err != nil {
+		s.logger("recovery: inspect failed", "deployment", id, "container", containerID, "error", err)
 		return nil
 	}
 	name := strings.TrimPrefix(live.Name, "/")
@@ -235,8 +237,14 @@ func (s *Server) recoverDeployment(ctx context.Context, id, appName, owner strin
 		dep = existing
 	}
 	if err := store.SaveDeployment(s.db, *dep); err != nil {
+		s.logger("recovery: save failed", "deployment", id, "error", err)
 		return nil
 	}
+	// Сразу подписываемся на живые логи восстановленного контейнера.
+	if dep.Container != "" && dep.Status == "running" {
+		s.streamer.Attach(dep.Container, dep.Name)
+	}
+	s.logger("deployment recovered from docker", "deployment", id, "container", containerID, "app", dep.AppName)
 	return dep
 }
 
@@ -483,7 +491,9 @@ func (s *Server) handleContainerRecreate(w http.ResponseWriter, r *http.Request)
 	dep.Volumes = string(volumesJSON)
 	dep.Env = string(envJSON)
 	dep.Status = "running"
-	_ = store.SaveDeployment(s.db, *dep)
+	if err := store.SaveDeployment(s.db, *dep); err != nil {
+		s.logger("recreate: record not saved", "deployment", dep.ID, "error", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "container_id": id, "status": "running"})
 }
 
@@ -731,6 +741,13 @@ func (s *Server) handleContainerLogStream(w http.ResponseWriter, r *http.Request
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "deployment not found"})
 		return
+	}
+
+	// Стример цепляется к контейнерам при деплое и при старте агента.
+	// Восстановленные из Docker деплои (потерянная SQLite) остаются без
+	// подписки, и живые строки не текут — цепляемся лениво, Attach идемпотентен.
+	if dep.Container != "" {
+		s.streamer.Attach(dep.Container, dep.Name)
 	}
 
 	var history []string

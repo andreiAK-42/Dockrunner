@@ -144,7 +144,7 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
           setSyncError('Не удалось запросить обновление контейнера')
         }
       } else {
-        setSyncError('Не удалось проверить статус контейнера')
+        setSyncError(err instanceof ApiError && err.message ? err.message : 'Не удалось проверить статус контейнера')
       }
     } finally {
       setSyncing(false)
