@@ -28,7 +28,7 @@ export async function login(login: string, password: string) {
     auth: false,
     body: { login, password },
   })
-  setTokens(res.data.access_token, res.data.refresh_token)
+  setTokens(res.data.access_token, res.data.refresh_token, res.data.expires_at)
   return res.data
 }
 
@@ -38,7 +38,9 @@ export function fetchMe() {
 
 export async function logout() {
   try {
-    await apiRequest('/api/v1/auth/logout', { method: 'POST' })
+    // noRefresh: при протухшем токене не гонять refresh-петлю —
+    // logout луч-effort, токены всё равно чистим ниже.
+    await apiRequest('/api/v1/auth/logout', { method: 'POST', noRefresh: true })
   } finally {
     clearTokens()
   }

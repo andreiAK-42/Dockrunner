@@ -1,4 +1,4 @@
-import { apiBase, apiRequest, authHeaders } from './client'
+import { apiRequest } from './client'
 
 export interface FileEntry {
   name: string
@@ -32,21 +32,14 @@ export async function uploadFile(node: string, path: string, file: File, owner?:
     form.append('owner', owner)
   }
   form.append('file', file)
-  const res = await fetch(`${apiBase()}/api/v1/files/upload`, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: form,
-  })
-  if (!res.ok) throw new Error('Загрузка не удалась')
+  await apiRequest('/api/v1/files/upload', { method: 'POST', form })
 }
 
-export async function downloadFile(node: string, path: string, owner?: string) {
-  const res = await fetch(
-    `${apiBase()}/api/v1/files/download?node=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}${ownerQuery(owner)}`,
-    { headers: authHeaders() },
+export function downloadFile(node: string, path: string, owner?: string) {
+  return apiRequest<Blob>(
+    `/api/v1/files/download?node=${encodeURIComponent(node)}&path=${encodeURIComponent(path)}${ownerQuery(owner)}`,
+    { blob: true },
   )
-  if (!res.ok) throw new Error('Скачивание не удалось')
-  return res.blob()
 }
 
 export function deleteFile(node: string, path: string, owner?: string) {

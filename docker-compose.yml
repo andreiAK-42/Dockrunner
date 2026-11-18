@@ -18,7 +18,6 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    # Все настройки бэкенда — из .env (секреты не зашиты в compose).
     env_file:
       - .env
 
@@ -26,8 +25,9 @@ services:
     build:
       context: ./dockrunner
       args:
-        # URL бэкенда вшивается в сборку на этапе build — менять только через .env + rebuild.
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8080}
+        VITE_VICTORIA_LOGS_URL: ${VITE_VICTORIA_LOGS_URL:-http://localhost:9428}
+        VITE_VICTORIA_METRICS_URL: ${VITE_VICTORIA_METRICS_URL:-http://localhost:8428}
     restart: unless-stopped
     ports:
       - "80:80"

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { apiBase, getToken } from '../api/client'
 import { fetchContainerLogs } from '../api/containers'
+import { openAuthedWS } from '../api/ws'
 
 const FALLBACK_POLL_MS = 5000
 
@@ -52,7 +52,6 @@ export function useContainerLogs(containerId: string, enabled: boolean, maxLines
     let gotLive = false
 
     // Новый контейнер — начинаем с чистого листа.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLines(null)
     setError('')
     setLive(false)
@@ -87,53 +86,53 @@ export function useContainerLogs(containerId: string, enabled: boolean, maxLines
 
     replaceWithTail()
 
-    try {
-      const wsBase = apiBase().replace(/^http/, 'ws')
-      const token = encodeURIComponent(getToken() || '')
-      socket = new WebSocket(`${wsBase}/api/v1/containers/${containerId}/logs/stream?token=${token}`)
-    } catch {
-      startPollingFallback()
-    }
-
-    if (socket) {
-      socket.onopen = () => {
+    const disposeWS = openAuthedWS(`/api/v1/containers/${containerId}/logs/stream`, {
+      onOpen: (ws) => {
+        socket = ws
         if (alive) setLive(true)
-      }
 
-      socket.onmessage = (message) => {
-        if (!alive) return
-        const raw = String(message.data)
+        ws.onmessage = (message) => {
+          if (!alive) return
+          const raw = String(message.data)
 
-        const parsed = liveLine(raw)
-        if (parsed !== null) {
-          gotLive = true
-          appendLines(splitLines(parsed))
-          return
+          const parsed = liveLine(raw)
+          if (parsed !== null) {
+            gotLive = true
+            appendLines(splitLines(parsed))
+            return
+          }
+
+          // Plain text = history. Use it only when the HTTP tail was empty,
+          // otherwise the same lines would be shown twice.
+          if (!historyFromHttp) {
+            appendLines(splitLines(raw))
+          }
         }
 
-        // Plain text = history. Use it only when the HTTP tail was empty,
-        // otherwise the same lines would be shown twice.
-        if (!historyFromHttp) {
-          appendLines(splitLines(raw))
+        ws.onerror = () => {
+          if (alive && !gotLive) {
+            startPollingFallback()
+          }
         }
-      }
 
-      socket.onerror = () => {
-        if (alive && !gotLive) {
-          startPollingFallback()
+        ws.onclose = () => {
+          if (alive) {
+            setLive(false)
+            startPollingFallback()
+          }
         }
-      }
-
-      socket.onclose = () => {
+      },
+      onClose: () => {
         if (alive) {
           setLive(false)
           startPollingFallback()
         }
-      }
-    }
+      },
+    })
 
     return () => {
       alive = false
+      disposeWS()
       if (pollTimer !== null) clearInterval(pollTimer)
       try {
         socket?.close()

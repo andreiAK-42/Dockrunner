@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, RefreshCw, AlertCircle } from 'lucide-react'
 import { fetchMine, fetchContainerSpec, refreshContainerByApp } from '../../api/containers'
 import styles from './Applications.module.scss'
-import { statusLabel, statusColor } from '../../utils/status'
+import { statusLabel, statusColor, IN_PROGRESS_STATUSES } from '../../utils/status'
 import { useRealtimeStatus } from '../../hooks/useRealtime'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
 import { containerStatusPatched, fetchMineContainers } from '../../store/slices/containersSlice'
@@ -47,7 +47,12 @@ export default function Applications() {
   }, [dispatch])
 
   // Verify actual container status for all containers
-  const verifyContainerStatuses = useCallback(async () => {
+  const syncingRef = useRef(false)
+  const verifyContainerStatuses = useCallback(async (onlySuspicious = false) => {
+    if (syncingRef.current) {
+      return
+    }
+    syncingRef.current = true
     setSyncing(true)
     setSyncError(null)
     setSyncSuccess(null)
@@ -55,11 +60,18 @@ export default function Applications() {
     try {
       // Fetch fresh container list from backend to avoid stale closure
       const mineRes = await fetchMine()
-      const currentRows = mineRes.data
+      let currentRows = mineRes.data
+
+      // Фолбэк-поллинг (WS упал) проверяет только «подозрительные» статусы,
+      // чтобы не гонять spec-запрос на каждый контейнер раз в 30 секунд.
+      if (onlySuspicious) {
+        currentRows = currentRows.filter(
+          (container) => IN_PROGRESS_STATUSES.has(container.status) || container.status === 'error',
+        )
+      }
 
       if (currentRows.length === 0) {
         setSyncSuccess('Статусы актуальны, изменений нет')
-        setSyncing(false)
         return
       }
 
@@ -109,6 +121,7 @@ export default function Applications() {
     } catch {
       setSyncError('Не удалось синхронизировать статусы')
     } finally {
+      syncingRef.current = false
       setSyncing(false)
     }
   }, [dispatch])
@@ -123,16 +136,15 @@ export default function Applications() {
   }, [rows.length, verifyContainerStatuses])
 
   // Fallback status sync: only while the WebSocket is down.
+  // Проверяем только «подозрительные» статусы, чтобы не гонять spec на всё.
   useEffect(() => {
     if (connected) return
     const interval = setInterval(() => {
-      if (rows.length > 0) {
-        verifyContainerStatuses()
-      }
+      void verifyContainerStatuses(true)
     }, 30000)
 
     return () => clearInterval(interval)
-  }, [rows, connected, verifyContainerStatuses])
+  }, [connected, verifyContainerStatuses])
 
   const columns: GridColDef[] = [
     { field: 'app_name', headerName: 'Название приложения', flex: 1, minWidth: 200, align: 'center', headerAlign: 'center' },
@@ -212,7 +224,7 @@ export default function Applications() {
           <Button
             variant="outlined"
             startIcon={<RefreshCw size={18} />}
-            onClick={verifyContainerStatuses}
+            onClick={() => void verifyContainerStatuses()}
             disabled={syncing || rows.length === 0}
           >
             {syncing ? 'Синхронизация...' : 'Синхронизировать статусы'}

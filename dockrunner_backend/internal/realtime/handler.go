@@ -36,17 +36,20 @@ func NewHandler(hub *Hub, logger *zap.Logger, jwtSecret string) *Handler {
 // Stream godoc
 // @Summary Канал событий панели по WebSocket
 // @Description Один канал на сессию: контейнеры, проверки репозитория и заявки.
-// @Description Токен — в ?token=, браузер не ставит заголовки. Клиент может
-// @Description подписаться/отписаться сообщениями {"action":"subscribe","topics":["containers"]}.
+// @Description Токен — в ?token=, браузер не ставит заголовки. Если токена в
+// @Description query нет, первым сообщением нужно отправить {"action":"auth","token":"..."}
+// @Description в течение 5 секунд. Клиент может подписаться/отписаться сообщениями
+// @Description {"action":"subscribe","topics":["containers"]}.
 // @Tags realtime
 // @Produce json
-// @Param token query string true "JWT пользователя"
+// @Param token query string false "JWT пользователя"
 // @Success 101 "Переключение на WebSocket"
 // @Failure 401 {object} gin.H
 // @Router /api/v1/ws [get]
 func (h *Handler) Stream(c *gin.Context) {
 	claims, ok := h.queryClaims(c)
-	if !ok {
+	if c.Query("token") != "" && !ok {
+		// Токен передан, но невалиден — 401 до апгрейда, как раньше.
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 		return
 	}
@@ -60,6 +63,15 @@ func (h *Handler) Stream(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("realtime accept failed", zap.Error(err))
 		return
+	}
+
+	if !ok {
+		// Токена в query нет — ждём {"action":"auth","token":"..."} первым сообщением.
+		claims, ok = h.readAuthMessage(conn)
+		if !ok {
+			_ = conn.Close(websocket.StatusPolicyViolation, "auth required")
+			return
+		}
 	}
 
 	client := newClient(h.hub, conn, claims.Login, claims.Role)
@@ -140,6 +152,10 @@ func (h *Handler) queryClaims(c *gin.Context) (*middleware.Claims, bool) {
 	if raw == "" {
 		return nil, false
 	}
+	return h.parseClaims(raw)
+}
+
+func (h *Handler) parseClaims(raw string) (*middleware.Claims, bool) {
 	claims := &middleware.Claims{}
 	token, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (interface{}, error) {
 		return []byte(h.jwtSecret), nil
@@ -148,6 +164,26 @@ func (h *Handler) queryClaims(c *gin.Context) (*middleware.Claims, bool) {
 		return nil, false
 	}
 	return claims, true
+}
+
+// readAuthMessage ждёт первым сообщением {"action":"auth","token":"..."}.
+// Нужно, чтобы не светить JWT в URL WebSocket (логи прокси, history).
+func (h *Handler) readAuthMessage(conn *websocket.Conn) (*middleware.Claims, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn.SetReadLimit(4 << 10)
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		return nil, false
+	}
+	var msg struct {
+		Action string `json:"action"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Token == "" {
+		return nil, false
+	}
+	return h.parseClaims(msg.Token)
 }
 
 // hijackWriter clears the HTTP server deadlines before handing the connection

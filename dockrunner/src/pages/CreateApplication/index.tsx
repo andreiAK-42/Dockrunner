@@ -36,7 +36,6 @@ export default function CreateApplication() {
 
     // Env config
     envConfigId,
-    appliedKeys,
     configs,
     fillFromConfig,
 

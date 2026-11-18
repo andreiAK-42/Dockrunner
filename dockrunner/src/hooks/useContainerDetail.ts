@@ -8,6 +8,7 @@ import { useContainerLogs } from './useContainerLogs'
 import { useEnvConfigs } from './useEnvConfigs'
 import type { MineContainer, ContainerSpec } from '../api/containers'
 import { ApiError } from '../api/client'
+import { openAuthedWS } from '../api/ws'
 import { IN_PROGRESS_STATUSES } from '../utils/status'
 import { buildDockerRun, specEnvArgs, shellArg, getErrorText } from '../utils/dockerCommand'
 
@@ -15,7 +16,6 @@ const POLL_INTERVAL_MS = 5000
 const DELETE_TIMEOUT_MS = 120000
 const OPERATION_TIMEOUT_MS = 90000
 const REFRESH_TIMEOUT_MS = 600000
-const BUILD_LOG_POLL_MS = 5000
 const MESSAGE_HIDE_MS = 8000
 const CONFIRM_RESET_MS = 5000
 const MAX_BUILD_LOG_LINES = 2000
@@ -170,14 +170,16 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
     void dispatch(fetchMineContainers())
   }, [id, dispatch])
 
-  // Auto-verify status on initial load only
-  const verifiedRef = useRef(false)
+  // Auto-verify status on initial load and when switching to another container
+  const verifiedRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!verifiedRef.current && record) {
-      verifiedRef.current = true
-      void verifyContainerStatus()
+    const rid = record?.id
+    if (!rid || verifiedRef.current === rid) {
+      return
     }
-  }, [record, verifyContainerStatus])
+    verifiedRef.current = rid
+    void verifyContainerStatus()
+  }, [record?.id, verifyContainerStatus])
 
   // Fallback status sync: only while the WebSocket is down
   useEffect(() => {
@@ -212,14 +214,22 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
   }, [record, record?.id, record?.status, busy, connected, dispatch])
 
   useEffect(() => {
-    if (!record) {
+    const recordId = record?.id
+    if (!recordId) {
       return
     }
-    const recordId = record.id
+    let alive = true
     fetchContainerSpec(recordId)
-      .then((res) => setSpec(res.data))
-      .catch(() => setSpec(null))
-  }, [record])
+      .then((res) => {
+        if (alive) setSpec(res.data)
+      })
+      .catch(() => {
+        if (alive) setSpec(null)
+      })
+    return () => {
+      alive = false
+    }
+  }, [record?.id])
 
   const logsEnabled = !!record // We'll let the component decide which tab
   const { lines: logs, error: logsError, live: logsLive } = useContainerLogs(record?.id || '', logsEnabled, MAX_LOG_LINES)
@@ -235,14 +245,12 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
       // с внешним ресурсом (WS-поток сборки), а не каскадный рендер.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setBuildLog(null)
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBuildLogError('')
       return
     }
 
     let alive = true
     let socket: WebSocket | null = null
-    let pollTimer: ReturnType<typeof setInterval> | null = null
     let gotData = false
 
     const appendLine = (line: string) => {
@@ -263,48 +271,26 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
       })
     }
 
-    const loadBuildLogOnce = () => {
-      fetchContainerSpec(recordId)
-        .then(() => {
-          if (!alive) return
-          // The build log is fetched from a different endpoint
-          // For now we'll skip this in the hook since it's container-specific
-        })
-        .catch(() => {})
-    }
-
-    const startPollingFallback = () => {
-      if (pollTimer !== null) return
-      loadBuildLogOnce()
-      pollTimer = setInterval(loadBuildLogOnce, BUILD_LOG_POLL_MS)
-    }
-
-    const openStream = () => {
-      try {
-        const httpBase = 'http://localhost:8080' // placeholder
-        const wsBase = httpBase.replace(/^http/, 'ws')
-        const token = encodeURIComponent(localStorage.getItem('token') || '')
-        socket = new WebSocket(`${wsBase}/api/v1/containers/${recordId}/build-log/stream?token=${token}`)
-      } catch {
-        startPollingFallback()
-        return
-      }
-
-      socket.onmessage = (event) => appendLine(String(event.data))
-      socket.onerror = () => {
-        if (alive && !gotData) {
-          startPollingFallback()
+    const disposeWS = openAuthedWS(`/api/v1/containers/${recordId}/build-log/stream`, {
+      onOpen: (ws) => {
+        socket = ws
+        ws.onmessage = (event) => appendLine(String(event.data))
+        ws.onerror = () => {
+          if (alive && !gotData) {
+            setBuildLogError('Поток сборки недоступен')
+          }
         }
-      }
-    }
-
-    openStream()
+      },
+      onClose: () => {
+        if (alive && !gotData) {
+          setBuildLogError('Поток сборки недоступен')
+        }
+      },
+    })
 
     return () => {
       alive = false
-      if (pollTimer !== null) {
-        clearInterval(pollTimer)
-      }
+      disposeWS()
       try {
         socket?.close()
       } catch {

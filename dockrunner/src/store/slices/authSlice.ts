@@ -9,7 +9,7 @@ export interface AuthUser {
   isSuperuser: boolean
 }
 
-const STORAGE_KEY = 'dockyard-auth-v1'
+const STORAGE_KEY = 'dockrunner-auth-v1'
 
 export function toAuthUser(login: string, role: string, isSuperuser?: boolean): AuthUser {
   const displayName = login.charAt(0).toUpperCase() + login.slice(1)
@@ -58,6 +58,8 @@ export const restoreAuth = createAsyncThunk<AuthUser | null>('auth/restore', asy
   if (!getToken()) {
     return null
   }
+  // access-токен мог протухнуть — всё равно идём в fetchMe:
+  // apiRequest сам сделает refresh по 401, refresh-токен живёт дольше access.
   try {
     const res = await fetchMe()
     const user = toAuthUser(res.data.login, res.data.role, res.data.is_superuser)

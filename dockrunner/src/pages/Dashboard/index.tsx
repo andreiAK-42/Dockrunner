@@ -14,7 +14,7 @@ import type { StorageUsage } from '../../api/storage'
 import { fetchMyBalance } from '../../api/balances'
 import { TARIFF } from '../../config/tariff'
 import { timeAgo } from '../../utils/time'
-import { statusLabel, statusColor } from '../../utils/status'
+import { statusLabel, statusColor, IN_PROGRESS_STATUSES } from '../../utils/status'
 import { useRealtimeStatus } from '../../hooks/useRealtime'
 import { useAppDispatch, useAppSelector } from '../../store/hooks'
 import { containerStatusPatched, fetchMineContainers } from '../../store/slices/containersSlice'
@@ -58,7 +58,12 @@ export default function Dashboard() {
   const connected = useRealtimeStatus()
 
   // Verify actual container status for all containers
-  const verifyContainerStatuses = useCallback(async () => {
+  const syncingRef = useRef(false)
+  const verifyContainerStatuses = useCallback(async (onlySuspicious = false) => {
+    if (syncingRef.current) {
+      return
+    }
+    syncingRef.current = true
     setSyncing(true)
     setSyncError(null)
     setSyncSuccess(null)
@@ -66,11 +71,19 @@ export default function Dashboard() {
     try {
       // Fetch fresh container list from backend to avoid stale closure
       const mineRes = await fetchMine()
-      const currentContainers = mineRes.data
+      let currentContainers = mineRes.data
+
+      // При периодическом фолбэке (WS упал) проверяем только контейнеры,
+      // чей статус мог рассинхронизоваться — иначе это N+1 spec-запросов
+      // на каждый контейнер раз в 30 секунд.
+      if (onlySuspicious) {
+        currentContainers = currentContainers.filter(
+          (container) => IN_PROGRESS_STATUSES.has(container.status) || container.status === 'error',
+        )
+      }
 
       if (currentContainers.length === 0) {
         setSyncSuccess('Статусы актуальны, изменений нет')
-        setSyncing(false)
         return
       }
 
@@ -120,6 +133,7 @@ export default function Dashboard() {
     } catch {
       setSyncError('Не удалось синхронизировать статусы')
     } finally {
+      syncingRef.current = false
       setSyncing(false)
     }
   }, [dispatch])
@@ -151,16 +165,15 @@ export default function Dashboard() {
   }, [containers.length, verifyContainerStatuses])
 
   // Fallback status sync: only while the WebSocket is down.
+  // Проверяем только «подозрительные» статусы, чтобы не гонять spec на всё.
   useEffect(() => {
     if (connected) return
     const interval = setInterval(() => {
-      if (containers.length > 0) {
-        verifyContainerStatuses()
-      }
+      void verifyContainerStatuses(true)
     }, 30000)
 
     return () => clearInterval(interval)
-  }, [containers, connected, verifyContainerStatuses])
+  }, [connected, verifyContainerStatuses])
 
   const onlineNodes = nodes.filter((node) => node.status === 'online')
   const usedGB = storage?.total_gb || 0

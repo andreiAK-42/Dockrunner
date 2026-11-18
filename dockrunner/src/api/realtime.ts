@@ -31,6 +31,8 @@ class RealtimeClient {
   private attempts = 0
   private stopped = false
   private connected = false
+  /** true — сервер не принял auth-сообщение, шлём токен в ?token= (фолбэк). */
+  private queryTokenFallback = false
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -123,17 +125,28 @@ class RealtimeClient {
 
     let socket: WebSocket
     try {
-      socket = new WebSocket(`${wsBase()}/api/v1/ws?token=${encodeURIComponent(token)}`)
+      // Токен предпочтительно шлём первым сообщением после connect,
+      // чтобы JWT не светился в URL (логи прокси/history). Фолбэк — ?token=.
+      const url = this.queryTokenFallback
+        ? `${wsBase()}/api/v1/ws?token=${encodeURIComponent(token)}`
+        : `${wsBase()}/api/v1/ws`
+      socket = new WebSocket(url)
     } catch {
       this.scheduleReconnect()
       return
     }
     this.socket = socket
 
+    let opened = false
+
     socket.onopen = () => {
       if (this.socket !== socket) return
+      opened = true
       this.attempts = 0
       this.setConnected(true)
+      if (!this.queryTokenFallback) {
+        this.send({ action: 'auth', token })
+      }
       for (const topic of this.handlers.keys()) {
         this.send({ action: 'subscribe', topics: [topic] })
       }
@@ -164,6 +177,11 @@ class RealtimeClient {
       if (this.socket !== socket) return
       this.socket = null
       this.setConnected(false)
+      // Сервер не умеет auth-сообщение (закрыл/отклонил до open) —
+      // переключаемся на ?token= и пробуем снова.
+      if (!opened && !this.queryTokenFallback) {
+        this.queryTokenFallback = true
+      }
       this.scheduleReconnect()
     }
 

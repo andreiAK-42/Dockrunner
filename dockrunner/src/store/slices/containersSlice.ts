@@ -42,6 +42,13 @@ const initialState: ContainersState = {
 export const fetchMineContainers = createAsyncThunk<MineContainer[]>('containers/fetchMine', async () => {
   const res = await fetchMine()
   return res.data
+}, {
+  // Не дублировать запрос при двойном монтировании (StrictMode) или
+  // параллельных диспатчах — RTK пропустит, если уже идёт загрузка.
+  condition: (_, { getState }) => {
+    const state = getState() as { containers: ContainersState }
+    return state.containers.mineStatus !== 'loading'
+  },
 })
 
 export const fetchAdminContainersThunk = createAsyncThunk<AdminContainer[]>('containers/fetchAdmin', async () => {

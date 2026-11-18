@@ -2,8 +2,11 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080'
 
 const TOKEN_KEY = 'dockrunner_token'
 const REFRESH_KEY = 'dockrunner_refresh'
+const TOKEN_EXP_KEY = 'dockrunner_token_exp'
 
 const LOGIN_PATH = '/login'
+
+const DEFAULT_TIMEOUT_MS = 30000
 
 export function apiBase() {
   return API_URL
@@ -30,14 +33,31 @@ function emitAuthEvent(name: string) {
   window.dispatchEvent(new Event(name))
 }
 
-export function setTokens(access: string, refresh: string) {
+export function setTokens(access: string, refresh: string, expiresAt?: string) {
   try {
     localStorage.setItem(TOKEN_KEY, access)
     localStorage.setItem(REFRESH_KEY, refresh)
+    if (expiresAt) {
+      localStorage.setItem(TOKEN_EXP_KEY, String(new Date(expiresAt).getTime()))
+    } else {
+      localStorage.removeItem(TOKEN_EXP_KEY)
+    }
   } catch {
     // localStorage недоступен — токены останутся только в памяти сессии
   }
   emitAuthEvent('dockrunner:auth-updated')
+}
+
+export function isTokenExpired(): boolean {
+  try {
+    const raw = localStorage.getItem(TOKEN_EXP_KEY)
+    if (!raw) {
+      return false
+    }
+    return Number(raw) <= Date.now()
+  } catch {
+    return false
+  }
 }
 
 export function getRefreshToken() {
@@ -52,6 +72,7 @@ export function clearTokens() {
   try {
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(REFRESH_KEY)
+    localStorage.removeItem(TOKEN_EXP_KEY)
   } catch {
     // localStorage недоступен — нечего очищать
   }
@@ -69,8 +90,12 @@ export class ApiError extends Error {
 interface RequestOptions {
   method?: string
   body?: unknown
+  form?: FormData
+  blob?: boolean
   auth?: boolean
   retry?: boolean
+  noRefresh?: boolean
+  signal?: AbortSignal
 }
 
 let refreshPromise: Promise<void> | null = null
@@ -87,7 +112,7 @@ async function requestNewTokens(refreshToken: string): Promise<void> {
   }
 
   const data = await res.json()
-  setTokens(data.access_token, data.refresh_token)
+  setTokens(data.access_token, data.refresh_token, data.expires_at)
 }
 
 function tryRefresh(): Promise<void> {
@@ -114,14 +139,21 @@ function forceLogout() {
     return
   }
 
-  const isAlreadyOnLogin = window.location.pathname.startsWith(LOGIN_PATH)
-  if (!isAlreadyOnLogin) {
-    window.location.href = LOGIN_PATH
+  // Мягкая навигация: App/AuthContext слушают событие и редиректят
+  // через роутер, без полной перезагрузки SPA. Если слушателя нет
+  // (например, событие случилось до монтирования), — фолбэк на location.
+  const event = new Event('dockrunner:force-logout', { cancelable: true })
+  window.dispatchEvent(event)
+  if (!event.defaultPrevented) {
+    const isAlreadyOnLogin = window.location.pathname.startsWith(LOGIN_PATH)
+    if (!isAlreadyOnLogin) {
+      window.location.href = LOGIN_PATH
+    }
   }
 }
 
 function buildAuthHeaders(options: RequestOptions): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const headers: Record<string, string> = {}
 
   const needsAuth = options.auth !== false
   if (needsAuth) {
@@ -129,6 +161,10 @@ function buildAuthHeaders(options: RequestOptions): Record<string, string> {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`
     }
+  }
+
+  if (options.form === undefined) {
+    headers['Content-Type'] = 'application/json'
   }
 
   return headers
@@ -148,9 +184,12 @@ function extractErrorMessage(data: unknown, status: number): string {
 async function doFetch<T>(path: string, options: RequestOptions): Promise<T> {
   const headers = buildAuthHeaders(options)
   const method = options.method || 'GET'
-  const body = options.body !== undefined ? JSON.stringify(options.body) : undefined
+  const body = options.form ?? (options.body !== undefined ? JSON.stringify(options.body) : undefined)
 
-  const res = await fetch(`${API_URL}${path}`, { method, headers, body })
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal
+
+  const res = await fetch(`${API_URL}${path}`, { method, headers, body, signal })
 
   if (!res.ok) {
     const data = await res.json().catch(() => null)
@@ -160,6 +199,10 @@ async function doFetch<T>(path: string, options: RequestOptions): Promise<T> {
 
   if (res.status === 204) {
     return undefined as T
+  }
+
+  if (options.blob) {
+    return (await res.blob()) as T
   }
 
   return res.json() as Promise<T>
@@ -176,6 +219,9 @@ function shouldTryRefresh(error: unknown, options: RequestOptions): boolean {
     return false
   }
   if (options.retry) {
+    return false
+  }
+  if (options.noRefresh) {
     return false
   }
   return true

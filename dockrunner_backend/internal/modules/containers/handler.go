@@ -484,24 +484,23 @@ func (h *Handler) BuildLog(c *gin.Context) {
 
 // BuildLogStream godoc
 // @Summary Живой лог сборки по WebSocket (прокси на воркер)
-// @Description Токен — в ?token=, браузер не ставит заголовки. Сначала история, затем живые строки.
+// @Description Токен — в ?token= или первым сообщением {"action":"auth","token":"..."}. Сначала история, затем живые строки.
 // @Tags containers
 // @Produce json
 // @Param id path string true "ID деплоя"
-// @Param token query string true "JWT пользователя"
+// @Param token query string false "JWT пользователя"
 // @Success 101 "Переключение на WebSocket"
 // @Failure 401 {object} response.Error
 // @Failure 404 {object} response.Error
 // @Router /api/v1/containers/{id}/build-log/stream [get]
 func (h *Handler) BuildLogStream(c *gin.Context) {
-	claims, ok := h.queryToken(c)
+	clientConn, claims, ok := h.acceptAndAuth(c)
 	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 		return
 	}
 	rec, err := h.service.GetRecord(c.Request.Context(), claims.Login, c.Param("id"))
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "application not found"})
+		h.closeStreamNotFound(clientConn, "application not found")
 		return
 	}
 	wsURL, err := h.service.AgentBuildLogStreamURL(c.Request.Context(), rec.NodeID, rec.ID)
@@ -510,32 +509,31 @@ func (h *Handler) BuildLogStream(c *gin.Context) {
 		if errors.Is(err, agents.ErrNoAPIURL) {
 			msg = "воркер не сообщил свой адрес API — задайте AGENT_PUBLIC_URL у агента"
 		}
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": msg})
+		h.closeStreamNotFound(clientConn, msg)
 		return
 	}
-	h.proxyAgentStream(c, wsURL, "build log stream")
+	h.proxyAgentStream(c, clientConn, wsURL, "build log stream")
 }
 
 // ContainerLogStream godoc
 // @Summary Живые логи контейнера по WebSocket (прокси на воркер)
-// @Description Токен — в ?token=. Сначала история, затем живые строки.
+// @Description Токен — в ?token= или первым сообщением {"action":"auth","token":"..."}. Сначала история, затем живые строки.
 // @Tags containers
 // @Produce json
 // @Param id path string true "ID контейнера"
-// @Param token query string true "JWT пользователя"
+// @Param token query string false "JWT пользователя"
 // @Success 101 "Переключение на WebSocket"
 // @Failure 401 {object} response.Error
 // @Failure 404 {object} response.Error
 // @Router /api/v1/containers/{id}/logs/stream [get]
 func (h *Handler) ContainerLogStream(c *gin.Context) {
-	claims, ok := h.queryToken(c)
+	clientConn, claims, ok := h.acceptAndAuth(c)
 	if !ok {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
 		return
 	}
 	rec, err := h.service.GetRecord(c.Request.Context(), claims.Login, c.Param("id"))
 	if err != nil {
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "application not found"})
+		h.closeStreamNotFound(clientConn, "application not found")
 		return
 	}
 	wsURL, err := h.service.AgentContainerLogStreamURL(c.Request.Context(), rec.NodeID, rec.ID)
@@ -544,19 +542,46 @@ func (h *Handler) ContainerLogStream(c *gin.Context) {
 		if errors.Is(err, agents.ErrNoAPIURL) {
 			msg = "воркер не сообщил свой адрес API — задайте AGENT_PUBLIC_URL у агента"
 		}
-		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": msg})
+		h.closeStreamNotFound(clientConn, msg)
 		return
 	}
-	h.proxyAgentStream(c, wsURL, "container log stream")
+	h.proxyAgentStream(c, clientConn, wsURL, "container log stream")
+}
+
+// acceptAndAuth принимает браузерный WebSocket и аутентифицирует клиента:
+// либо токен в ?token= (401 до апгрейда, если передан, но невалиден),
+// либо первым сообщением {"action":"auth","token":"..."} в течение 5 секунд.
+func (h *Handler) acceptAndAuth(c *gin.Context) (*websocket.Conn, *middleware.Claims, bool) {
+	claims, ok := h.queryToken(c)
+	if c.Query("token") != "" && !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired token"})
+		return nil, nil, false
+	}
+
+	clientConn, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+	if err != nil {
+		return nil, nil, false
+	}
+
+	if !ok {
+		claims, ok = h.readTokenMessage(clientConn)
+		if !ok {
+			_ = clientConn.Close(websocket.StatusPolicyViolation, "auth required")
+			return nil, nil, false
+		}
+	}
+	return clientConn, claims, true
+}
+
+// closeStreamNotFound завершает уже принятый WebSocket с текстовой ошибкой —
+// HTTP-статусы после апгрейда не передать.
+func (h *Handler) closeStreamNotFound(conn *websocket.Conn, msg string) {
+	_ = conn.Close(websocket.StatusNormalClosure, msg)
 }
 
 // proxyAgentStream pipes a worker WebSocket to the browser and keeps the
 // client-to-agent direction alive so close frames are propagated.
-func (h *Handler) proxyAgentStream(c *gin.Context, wsURL, label string) {
-	clientConn, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
-	if err != nil {
-		return
-	}
+func (h *Handler) proxyAgentStream(c *gin.Context, clientConn *websocket.Conn, wsURL, label string) {
 	defer func() { _ = clientConn.Close(websocket.StatusNormalClosure, "") }()
 
 	dialCtx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -590,11 +615,18 @@ func (h *Handler) proxyAgentStream(c *gin.Context, wsURL, label string) {
 	}
 }
 
+// queryToken возвращает claims по ?token=. Если query-параметра нет,
+// соединение уже принято, и клиент обязан первым сообщением отправить
+// {"action":"auth","token":"..."} — см. readTokenMessage.
 func (h *Handler) queryToken(c *gin.Context) (*middleware.Claims, bool) {
 	raw := c.Query("token")
 	if raw == "" {
 		return nil, false
 	}
+	return h.parseToken(raw)
+}
+
+func (h *Handler) parseToken(raw string) (*middleware.Claims, bool) {
 	claims := &middleware.Claims{}
 	token, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (interface{}, error) {
 		return []byte(h.jwtSecret), nil
@@ -603,4 +635,24 @@ func (h *Handler) queryToken(c *gin.Context) (*middleware.Claims, bool) {
 		return nil, false
 	}
 	return claims, true
+}
+
+// readTokenMessage ждёт первым сообщением {"action":"auth","token":"..."},
+// чтобы не светить JWT в URL WebSocket.
+func (h *Handler) readTokenMessage(conn *websocket.Conn) (*middleware.Claims, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn.SetReadLimit(4 << 10)
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		return nil, false
+	}
+	var msg struct {
+		Action string `json:"action"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil || msg.Token == "" {
+		return nil, false
+	}
+	return h.parseToken(msg.Token)
 }

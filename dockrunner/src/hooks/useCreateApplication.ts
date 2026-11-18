@@ -319,9 +319,6 @@ export function useCreateApplication(): UseCreateApplicationReturn {
 
           setAppliedKeys(detectedEntries.map(([key]) => key))
           envRows.setItems([...keptRows, ...addedRows])
-          if (keptRows.length === 0 && addedRows.length > 0) {
-            envRows.setItems(addedRows)
-          }
         }
 
         // Show modal for build mode selection
