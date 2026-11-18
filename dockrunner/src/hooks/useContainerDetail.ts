@@ -16,6 +16,7 @@ const POLL_INTERVAL_MS = 5000
 const DELETE_TIMEOUT_MS = 120000
 const OPERATION_TIMEOUT_MS = 90000
 const REFRESH_TIMEOUT_MS = 600000
+const BUILD_LOG_POLL_MS = 5000
 const MESSAGE_HIDE_MS = 8000
 const CONFIRM_RESET_MS = 5000
 const MAX_BUILD_LOG_LINES = 2000
@@ -252,7 +253,7 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
       fetchBuildLog(recordId)
         .then((res) => {
           if (alive) {
-            setBuildLog(res.data || '')
+            setBuildLog(res.data ? res.data.replace(/\x1b\[[0-9;]*m/g, '') : '') // eslint-disable-line no-control-regex
             setBuildLogError('')
           }
         })
@@ -270,6 +271,31 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
     let alive = true
     let socket: WebSocket | null = null
     let gotData = false
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+
+    // Фолбэк, если живой WS-поток недоступен (например, у агента не задан
+    // AGENT_PUBLIC_URL): агент всё равно пишет лог сборки в своё хранилище,
+    // забираем его периодически по HTTP.
+    const startHttpFallback = () => {
+      if (pollTimer !== null) return
+      const load = () => {
+        fetchBuildLog(recordId)
+          .then((res) => {
+            if (alive && res.data) {
+              gotData = true
+              setBuildLogError('')
+              setBuildLog(stripAnsi(res.data))
+            }
+          })
+          .catch(() => {})
+      }
+      load()
+      pollTimer = setInterval(load, BUILD_LOG_POLL_MS)
+    }
+
+    // Docker/buildkit красит вывод ANSI-кодами (например, \x1b[91m для ошибок) —
+    // в окне лога они мусором, убираем.
+    const stripAnsi = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '') // eslint-disable-line no-control-regex
 
     const appendLine = (line: string) => {
       if (!alive) {
@@ -278,14 +304,15 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
       gotData = true
       setBuildLogError('')
       setBuildLog((prev) => {
+        const clean = stripAnsi(line)
         if (prev === null || prev === '') {
-          return line
+          return clean
         }
         const lines = prev.split('\n')
         if (lines.length >= MAX_BUILD_LOG_LINES) {
-          return lines.slice(-(MAX_BUILD_LOG_LINES - 1)).join('\n') + '\n' + line
+          return lines.slice(-(MAX_BUILD_LOG_LINES - 1)).join('\n') + '\n' + clean
         }
-        return `${prev}\n${line}`
+        return `${prev}\n${clean}`
       })
     }
 
@@ -295,19 +322,24 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
         ws.onmessage = (event) => appendLine(String(event.data))
         ws.onerror = () => {
           if (alive && !gotData) {
-            setBuildLogError('Поток сборки недоступен')
+            setBuildLogError('Живой поток недоступен, обновляю лог по HTTP…')
+            startHttpFallback()
           }
         }
       },
       onClose: () => {
         if (alive && !gotData) {
-          setBuildLogError('Поток сборки недоступен')
+          setBuildLogError('Живой поток недоступен, обновляю лог по HTTP…')
+          startHttpFallback()
         }
       },
     })
 
     return () => {
       alive = false
+      if (pollTimer !== null) {
+        clearInterval(pollTimer)
+      }
       disposeWS()
       try {
         socket?.close()
