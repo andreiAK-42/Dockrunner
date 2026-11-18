@@ -72,12 +72,25 @@ export function fetchContainerStats(id: string) {
   return apiRequest<{ data: ContainerStats }>(`/api/v1/containers/${id}/stats`)
 }
 
+export interface ContainerSpecPort {
+  host: number
+  container: number
+}
+
+export interface ContainerSpecVolume {
+  name?: string
+  host_path?: string
+  container_path: string
+  read_only?: boolean
+}
+
 export interface ContainerSpec {
   id: string
   name: string
   image: string
   status: string
-  ports: { host: number; container: number }[]
+  ports: ContainerSpecPort[]
+  volumes: ContainerSpecVolume[]
   env: Record<string, string> | null
   entrypoint?: string[]
   cmd?: string[]
@@ -87,8 +100,61 @@ export interface ContainerSpec {
   user?: string
 }
 
-export function fetchContainerSpec(id: string) {
-  return apiRequest<{ data: ContainerSpec }>(`/api/v1/containers/${id}/spec`)
+// Разные источники spec отдают порты/тома по-разному: живой агент —
+// {host, container}, а фолбэк бэкенда из БД — {host_port, container_port}.
+// Приводим всё к единому виду, чтобы UI не показывал "undefined → undefined".
+interface RawSpecPort {
+  host?: number
+  container?: number
+  host_port?: number
+  container_port?: number
+}
+
+interface RawSpecVolume {
+  name?: string | null
+  host_path?: string | null
+  container_path?: string | null
+  read_only?: boolean
+}
+
+interface RawContainerSpec extends Omit<ContainerSpec, 'ports' | 'volumes'> {
+  ports?: RawSpecPort[] | null
+  volumes?: RawSpecVolume[] | null
+}
+
+function normalizeSpecPorts(raw: RawSpecPort[] | null | undefined): ContainerSpecPort[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((port) => ({
+      host: port.host ?? port.host_port ?? 0,
+      container: port.container ?? port.container_port ?? 0,
+    }))
+    .filter((port) => port.host > 0 && port.container > 0)
+}
+
+function normalizeSpecVolumes(raw: RawSpecVolume[] | null | undefined): ContainerSpecVolume[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((volume) => typeof volume.container_path === 'string' && volume.container_path !== '')
+    .map((volume) => ({
+      name: volume.name ?? undefined,
+      host_path: volume.host_path ?? undefined,
+      container_path: volume.container_path as string,
+      read_only: volume.read_only,
+    }))
+}
+
+function normalizeContainerSpec(raw: RawContainerSpec): ContainerSpec {
+  return {
+    ...raw,
+    ports: normalizeSpecPorts(raw.ports),
+    volumes: normalizeSpecVolumes(raw.volumes),
+  }
+}
+
+export async function fetchContainerSpec(id: string) {
+  const res = await apiRequest<{ data: RawContainerSpec }>(`/api/v1/containers/${id}/spec`)
+  return { ...res, data: normalizeContainerSpec(res.data) }
 }
 
 export function checkRepository(payload: { app_name: string; repo_url: string; node_id: string; branch: string }) {
@@ -199,8 +265,8 @@ export function parseDockerRunCommand(command: string): ParsedDockerRunCommand {
       const value = args[i+1]; if (value === undefined) throw new Error(`Для ${arg} не задано значение`); i += 2
       if (arg === '--name') result.name = value
       else if (arg === '--env' || arg === '-e') { const at = value.indexOf('='); if (at <= 0) throw new Error(`Некорректная переменная окружения: ${value}`); result.env[value.slice(0,at)] = value.slice(at+1) }
-      else if (arg === '-p' || arg === '--publish') { const bits = value.split(':'); const host = Number(bits[bits.length-2]), container = Number(bits[bits.length-1]); if (!host || !container) throw new Error(`Некорректный порт: ${value}`); result.ports.push({host,container}) }
-      else if (arg === '-v' || arg === '--volume') { const bits = value.split(':'); if (bits.length < 2) throw new Error(`Некорректный том: ${value}`); result.volumes.push({name: bits.slice(0,-1).join(':'),host_path: bits.slice(0,-1).join(':'),container_path: bits[bits.length-1]}) }
+      else if (arg === '-p' || arg === '--publish') { const bits = value.split(':'); const host = Number(bits[bits.length-2]), container = Number(bits[bits.length-1]); if (!host || !container) throw new Error(`Некорректный порт: ${value}`); (result.ports ??= []).push({host,container}) }
+      else if (arg === '-v' || arg === '--volume') { const bits = value.split(':'); if (bits.length < 2) throw new Error(`Некорректный том: ${value}`); (result.volumes ??= []).push({name: bits.slice(0,-1).join(':'),host_path: bits.slice(0,-1).join(':'),container_path: bits[bits.length-1]}) }
       else if (arg === '--restart') result.restart_policy = value
       else if (arg === '--entrypoint') result.entrypoint = [value]
       else if (arg === '--network') result.network = value

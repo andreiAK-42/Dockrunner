@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -50,7 +51,18 @@ type RunSpec struct {
 	DiskGB float64
 	// Network — пользовательская docker-сеть ("" = default).
 	Network string
+	// DeploymentID/AppName попадают в docker-метки: по ним агент находит
+	// свой контейнер, если локальная SQLite потерялась.
+	DeploymentID string
+	AppName      string
 }
+
+const (
+	// LabelDeployment/ LabelApp — метки, по которым восстанавливается
+	// потерянная запись о деплое (SQLite агента пересоздали без volume).
+	LabelDeployment = "dockrunner.deployment"
+	LabelApp        = "dockrunner.app"
+)
 
 type Stats struct {
 	CPUPercent float64
@@ -189,6 +201,13 @@ func (c *Client) Run(ctx context.Context, spec RunSpec) (string, error) {
 	if spec.DiskGB > 0 {
 		storageOpt["size"] = fmt.Sprintf("%.0fG", spec.DiskGB)
 	}
+	labels := map[string]string{}
+	if spec.DeploymentID != "" {
+		labels[LabelDeployment] = spec.DeploymentID
+	}
+	if spec.AppName != "" {
+		labels[LabelApp] = spec.AppName
+	}
 	netConfig := &network.NetworkingConfig{}
 	hostConfig := &container.HostConfig{
 		PortBindings:  bindings,
@@ -204,7 +223,7 @@ func (c *Client) Run(ctx context.Context, spec RunSpec) (string, error) {
 		}
 	}
 	resp, err := c.cli.ContainerCreate(ctx,
-		&container.Config{Image: spec.Image, Env: env, ExposedPorts: exposed, Entrypoint: spec.Entrypoint, Cmd: spec.Cmd},
+		&container.Config{Image: spec.Image, Env: env, ExposedPorts: exposed, Entrypoint: spec.Entrypoint, Cmd: spec.Cmd, Labels: labels},
 		hostConfig,
 		netConfig,
 		&ocispec.Platform{},
@@ -215,7 +234,7 @@ func (c *Client) Run(ctx context.Context, spec RunSpec) (string, error) {
 		// Запускаем без лимита диска, чтобы не ронять весь деплой.
 		hostConfig.StorageOpt = map[string]string{}
 		resp, err = c.cli.ContainerCreate(ctx,
-			&container.Config{Image: spec.Image, Env: env, ExposedPorts: exposed, Entrypoint: spec.Entrypoint, Cmd: spec.Cmd},
+			&container.Config{Image: spec.Image, Env: env, ExposedPorts: exposed, Entrypoint: spec.Entrypoint, Cmd: spec.Cmd, Labels: labels},
 			hostConfig,
 			netConfig,
 			&ocispec.Platform{},
@@ -247,6 +266,7 @@ type LiveSpec struct {
 	Network       string            `json:"network"`
 	WorkingDir    string            `json:"working_dir"`
 	User          string            `json:"user"`
+	Labels        map[string]string `json:"labels,omitempty"`
 }
 type LiveVolume struct {
 	Name          string `json:"name"`
@@ -261,7 +281,8 @@ func (c *Client) InspectSpec(ctx context.Context, id string) (LiveSpec, error) {
 		return LiveSpec{}, err
 	}
 	out := LiveSpec{ID: info.ID, Name: strings.TrimPrefix(info.Name, "/"), Image: info.Config.Image, Status: info.State.Status,
-		Env: map[string]string{}, Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd, WorkingDir: info.Config.WorkingDir, User: info.Config.User}
+		Env: map[string]string{}, Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd, WorkingDir: info.Config.WorkingDir, User: info.Config.User,
+		Labels: info.Config.Labels}
 	if info.HostConfig != nil {
 		out.RestartPolicy = string(info.HostConfig.RestartPolicy.Name)
 	}
@@ -278,14 +299,35 @@ func (c *Client) InspectSpec(ctx context.Context, id string) (LiveSpec, error) {
 		}
 	}
 	out.Ports = []PortMapping{}
+	seenPorts := map[[2]int]bool{}
+	addPort := func(hostPort, containerPort int) {
+		if hostPort <= 0 || containerPort <= 0 {
+			return
+		}
+		key := [2]int{hostPort, containerPort}
+		if seenPorts[key] {
+			return
+		}
+		seenPorts[key] = true
+		out.Ports = append(out.Ports, PortMapping{Host: hostPort, Container: containerPort})
+	}
 	if info.NetworkSettings != nil {
 		for port, bindings := range info.NetworkSettings.Ports {
 			containerPort, _ := strconv.Atoi(port.Port())
 			for _, binding := range bindings {
 				hostPort, _ := strconv.Atoi(binding.HostPort)
-				if hostPort > 0 && containerPort > 0 {
-					out.Ports = append(out.Ports, PortMapping{Host: hostPort, Container: containerPort})
-				}
+				addPort(hostPort, containerPort)
+			}
+		}
+	}
+	// У остановленного контейнера NetworkSettings.Ports может быть пустым,
+	// но привязки портов остаются в HostConfig.PortBindings.
+	if len(out.Ports) == 0 && info.HostConfig != nil {
+		for port, bindings := range info.HostConfig.PortBindings {
+			containerPort, _ := strconv.Atoi(port.Port())
+			for _, binding := range bindings {
+				hostPort, _ := strconv.Atoi(binding.HostPort)
+				addPort(hostPort, containerPort)
 			}
 		}
 	}
@@ -469,6 +511,24 @@ func (c *Client) FindIDBySuffix(ctx context.Context, suffix string) (string, err
 	return "", nil
 }
 
+// FindIDByLabels находит контейнер (включая остановленные) по docker-меткам.
+// Это основной способ восстановить деплой после потери SQLite: метки
+// выставляются при создании контейнера и не зависят от его имени.
+func (c *Client) FindIDByLabels(ctx context.Context, labels map[string]string) (string, error) {
+	args := make([]filters.KeyValuePair, 0, len(labels))
+	for key, value := range labels {
+		args = append(args, filters.Arg("label", key+"="+value))
+	}
+	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true, Filters: filters.NewArgs(args...)})
+	if err != nil {
+		return "", err
+	}
+	if len(list) == 0 {
+		return "", nil
+	}
+	return list[0].ID, nil
+}
+
 func (c *Client) ContainerStatus(ctx context.Context, id string) (string, error) {
 	info, err := c.cli.ContainerInspect(ctx, id)
 	if err != nil {
@@ -552,6 +612,13 @@ func cpuCount(st container.StatsResponse) int {
 }
 
 func (c *Client) LogsTail(ctx context.Context, id, tail string) (string, error) {
+	// Контейнеры с TTY (например, созданные вручную в Portainer) отдают
+	// не мультиплексированный поток: stdcopy на нём падает и лог получается
+	// пустым, хотя docker logs его показывает.
+	tty, err := c.containerTTY(ctx, id)
+	if err != nil {
+		return "", err
+	}
 	rc, err := c.cli.ContainerLogs(ctx, id, container.LogsOptions{
 		ShowStdout: true, ShowStderr: true, Follow: false, Tail: tail,
 	})
@@ -560,13 +627,30 @@ func (c *Client) LogsTail(ctx context.Context, id, tail string) (string, error) 
 	}
 	defer func() { _ = rc.Close() }()
 	var out, errOut lineBuffer
-	_, _ = stdcopy.StdCopy(&out, &errOut, rc)
+	if tty {
+		_, _ = io.Copy(&out, rc)
+	} else {
+		_, _ = stdcopy.StdCopy(&out, &errOut, rc)
+	}
 	out.Flush()
 	errOut.Flush()
 	return out.String() + errOut.String(), nil
 }
 
+// containerTTY сообщает, запущен ли контейнер с TTY.
+func (c *Client) containerTTY(ctx context.Context, id string) (bool, error) {
+	info, err := c.cli.ContainerInspect(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return info.Config != nil && info.Config.Tty, nil
+}
+
 func (c *Client) FollowLogs(ctx context.Context, id string, emit func(stream, line string)) error {
+	tty, err := c.containerTTY(ctx, id)
+	if err != nil {
+		return err
+	}
 	rc, err := c.cli.ContainerLogs(ctx, id, container.LogsOptions{
 		ShowStdout: true, ShowStderr: true, Follow: true, Tail: "50",
 	})
@@ -580,7 +664,11 @@ func (c *Client) FollowLogs(ctx context.Context, id string, emit func(stream, li
 	}()
 	out := &lineWriter{emit: func(line string) { emit("stdout", line) }}
 	errOut := &lineWriter{emit: func(line string) { emit("stderr", line) }}
-	_, _ = stdcopy.StdCopy(out, errOut, rc)
+	if tty {
+		_, _ = io.Copy(out, rc)
+	} else {
+		_, _ = stdcopy.StdCopy(out, errOut, rc)
+	}
 	out.Flush()
 	errOut.Flush()
 	return nil

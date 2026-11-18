@@ -216,6 +216,14 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
 
   useEffect(() => {
     const recordId = record?.id
+    // Новый контейнер — не показываем spec/лог сборки предыдущего.
+    // Сброс намеренный: состояние привязано к id контейнера.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setSpec(null)
+    setBuildLog(null)
+    setBuildLogError('')
+    setEditedDockerCmd(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     if (!recordId) {
       return
     }

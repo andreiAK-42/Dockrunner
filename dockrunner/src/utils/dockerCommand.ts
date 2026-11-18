@@ -24,9 +24,10 @@ export function specEnvArgs(spec: ContainerSpec | null): string {
 /**
  * Format a volume mount for docker command
  */
-export function formatVolumeMount(volume: { name: string; host_path: string; container_path: string }): string {
-  const source = volume.name || volume.host_path
-  return `-v ${shellArg(`${source}:${volume.container_path}`)}`
+export function formatVolumeMount(volume: { name?: string; host_path?: string; container_path: string; read_only?: boolean }): string {
+  const source = volume.name || volume.host_path || ''
+  const target = volume.read_only ? `${volume.container_path}:ro` : volume.container_path
+  return `-v ${shellArg(`${source}:${target}`)}`
 }
 
 /**

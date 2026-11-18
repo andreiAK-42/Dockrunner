@@ -418,13 +418,24 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 		rec.Status = "stopped"
 		s.publishContainer(rec.OwnerLogin, *rec)
 
-		// Build spec response from DB record
+		// Build spec response from DB record. Формат должен совпадать с
+		// ответом агента (host/container), иначе фронт получает undefined.
+		dbPorts := make([]struct {
+			Host      int `json:"host"`
+			Container int `json:"container"`
+		}, 0, len(rec.Ports))
+		for _, p := range rec.Ports {
+			dbPorts = append(dbPorts, struct {
+				Host      int `json:"host"`
+				Container int `json:"container"`
+			}{Host: p.HostPort, Container: p.ContainerPort})
+		}
 		spec := map[string]any{
 			"id":             rec.ID,
 			"name":           rec.AppName,
 			"image":          rec.Image,
 			"status":         rec.Status,
-			"ports":          rec.Ports,
+			"ports":          dbPorts,
 			"volumes":        rec.Volumes,
 			"env":            rec.Env,
 			"entrypoint":     []string{},

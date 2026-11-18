@@ -9,10 +9,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/coder/websocket"
-	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/docker/docker/api/types/network"
+	httpSwagger "github.com/swaggo/http-swagger"
 
 	"dockrunner_agent/internal/buildlog"
 	"dockrunner_agent/internal/config"
@@ -169,10 +170,14 @@ func (s *Server) findContainer(r *http.Request) (*store.Deployment, bool) {
 	return recovered, true
 }
 
-// recoverDeployment находит контейнер по суффиксу "-<shortID>" и пересоздаёт
+// recoverDeployment находит контейнер по docker-метке деплоя (или по
+// суффиксу "-<shortID>" для старых контейнеров без меток) и пересоздаёт
 // минимальную запись деплоя. Возвращает nil, если контейнер не найден.
 func (s *Server) recoverDeployment(ctx context.Context, id string) *store.Deployment {
-	containerID, err := s.dock.FindIDBySuffix(ctx, "-"+store.ShortID(id))
+	containerID, err := s.dock.FindIDByLabels(ctx, map[string]string{docker.LabelDeployment: id})
+	if err != nil || containerID == "" {
+		containerID, err = s.dock.FindIDBySuffix(ctx, "-"+store.ShortID(id))
+	}
 	if err != nil || containerID == "" {
 		return nil
 	}
@@ -181,9 +186,12 @@ func (s *Server) recoverDeployment(ctx context.Context, id string) *store.Deploy
 		return nil
 	}
 	name := strings.TrimPrefix(live.Name, "/")
-	appName := name
-	if suffix := "-" + store.ShortID(id); strings.HasSuffix(appName, suffix) {
-		appName = strings.TrimSuffix(appName, suffix)
+	appName := live.Labels[docker.LabelApp]
+	if appName == "" {
+		appName = name
+		if suffix := "-" + store.ShortID(id); strings.HasSuffix(appName, suffix) {
+			appName = strings.TrimSuffix(appName, suffix)
+		}
 	}
 	dep := &store.Deployment{
 		ID:        id,
@@ -529,12 +537,27 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 // @Router /deployments/{id}/build-log [get]
 func (s *Server) handleBuildLog(w http.ResponseWriter, r *http.Request) {
 	tail := queryTail(r)
-	text, ok := s.builds.Tail(r.PathValue("id"), tail)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no build log"})
-		return
+	// Берём первый непустой источник: для compose-сервиса это лог его
+	// собственной сборки, а для старых записей — лог родительского деплоя.
+	for _, id := range s.buildLogSources(r.PathValue("id")) {
+		if text, ok := s.builds.Tail(id, tail); ok {
+			writeJSON(w, http.StatusOK, LogsResponse{Data: text})
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, LogsResponse{Data: text})
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "no build log"})
+}
+
+// buildLogSources возвращает id, под которыми может храниться лог сборки.
+// Для compose-сервиса панель запрашивает дочерний id, а старые версии агента
+// писали лог под id родительского деплоя.
+func (s *Server) buildLogSources(id string) []string {
+	sources := []string{id}
+	dep, err := store.GetDeployment(s.db, id)
+	if err == nil && dep.ParentID != "" && dep.ParentID != id {
+		sources = append(sources, dep.ParentID)
+	}
+	return sources
 }
 
 // handleBuildLogStream godoc
@@ -548,15 +571,61 @@ func (s *Server) handleBuildLog(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {object} api.ErrorResponse
 // @Router /deployments/{id}/build-log/stream [get]
 func (s *Server) handleBuildLogStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	ids := s.buildLogSources(r.PathValue("id"))
 
+	// История — из первого источника, где она есть, чтобы не дублировать
+	// строки, если лог лежит и под дочерним, и под родительским id.
 	var history []string
-	if text, ok := s.builds.Tail(id, 10000); ok {
-		history = strings.Split(text, "\n")
+	for _, id := range ids {
+		if text, ok := s.builds.Tail(id, 10000); ok {
+			history = append(history, strings.Split(text, "\n")...)
+			break
+		}
 	}
 
 	serveStream(w, r, history, func() (<-chan string, func()) {
-		return s.builds.Subscribe(id)
+		if len(ids) == 1 {
+			return s.builds.Subscribe(ids[0])
+		}
+
+		// Несколько id (родитель + сервис): сливаем живые строки в один канал.
+		merged := make(chan string, 64)
+		done := make(chan struct{})
+		unsubs := make([]func(), 0, len(ids))
+		var wg sync.WaitGroup
+
+		for _, id := range ids {
+			ch, unsub := s.builds.Subscribe(id)
+			unsubs = append(unsubs, unsub)
+			wg.Add(1)
+			go func(ch <-chan string) {
+				defer wg.Done()
+				for {
+					select {
+					case <-done:
+						return
+					case line, ok := <-ch:
+						if !ok {
+							return
+						}
+						select {
+						case merged <- line:
+						case <-done:
+							return
+						}
+					}
+				}
+			}(ch)
+		}
+
+		return merged, func() {
+			close(done)
+			for _, unsub := range unsubs {
+				unsub()
+			}
+			wg.Wait()
+			close(merged)
+		}
 	})
 }
 

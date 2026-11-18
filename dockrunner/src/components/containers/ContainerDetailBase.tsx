@@ -165,7 +165,7 @@ export default function ContainerDetailBase({
 
       {tab === 0 && (
         <Stack spacing={3}>
-          {(isBuilding || record?.status === 'error') && (
+          {(isBuilding || record?.status === 'error' || (buildLog !== null && buildLog !== '')) && (
             <Card>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>

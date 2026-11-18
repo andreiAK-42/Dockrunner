@@ -470,7 +470,11 @@ func (h *Handler) pullImage(ctx context.Context, ref string) (string, error) {
 func (h *Handler) buildComposeService(ctx context.Context, task Task, svc git.ComposeService) (string, error) {
 	if svc.Dockerfile != "" {
 		tag := "app-" + shortID(task.DeploymentID) + "-" + svc.Name + ":latest"
-		if err := h.dock.Build(ctx, svc.ContextDir, svc.Dockerfile, tag, h.buildLines(task)); err != nil {
+		// Панель показывает запись «приложение-сервис», поэтому лог сборки
+		// пишем под её id, а не под id родительского деплоя.
+		buildTask := task
+		buildTask.DeploymentID = task.DeploymentID + "-" + svc.Name
+		if err := h.dock.Build(ctx, svc.ContextDir, svc.Dockerfile, tag, h.buildLines(buildTask)); err != nil {
 			return "", err
 		}
 		return tag, nil
@@ -653,6 +657,8 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		MemoryGB:      task.MemoryGB,
 		DiskGB:        task.DiskGB, // лимит диска (overlay2.size)
 		Network:       network,
+		DeploymentID:  deploymentID,
+		AppName:       appName,
 	})
 	if err != nil {
 		h.builds.Append(deploymentID, "ERROR: запуск не удался: "+err.Error())
@@ -760,13 +766,21 @@ func (h *Handler) loadDeployment(ctx context.Context, task Task, what string) (*
 	}
 	if errors.Is(err, store.ErrNoDeployment) {
 		// Самовосстановление: запись могла потеряться вместе с SQLite,
-		// а контейнер в Docker продолжает работать — ищем по имени.
-		if containerID, findErr := h.dock.FindIDBySuffix(ctx, "-"+store.ShortID(task.DeploymentID)); findErr == nil && containerID != "" {
+		// а контейнер в Docker продолжает работать — ищем по docker-метке,
+		// затем по имени (для старых контейнеров без меток).
+		containerID, findErr := h.dock.FindIDByLabels(ctx, map[string]string{docker.LabelDeployment: task.DeploymentID})
+		if findErr != nil || containerID == "" {
+			containerID, findErr = h.dock.FindIDBySuffix(ctx, "-"+store.ShortID(task.DeploymentID))
+		}
+		if findErr == nil && containerID != "" {
 			if live, inspErr := h.dock.InspectSpec(ctx, containerID); inspErr == nil {
 				name := strings.TrimPrefix(live.Name, "/")
-				appName := name
-				if suffix := "-" + store.ShortID(task.DeploymentID); strings.HasSuffix(appName, suffix) {
-					appName = strings.TrimSuffix(appName, suffix)
+				appName := live.Labels[docker.LabelApp]
+				if appName == "" {
+					appName = name
+					if suffix := "-" + store.ShortID(task.DeploymentID); strings.HasSuffix(appName, suffix) {
+						appName = strings.TrimSuffix(appName, suffix)
+					}
 				}
 				dep := &store.Deployment{
 					ID:        task.DeploymentID,
