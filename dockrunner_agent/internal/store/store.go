@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -39,6 +40,16 @@ type Deployment struct {
 // ErrNoDeployment means the deployment is unknown to this agent —
 // retrying the task cannot fix it.
 var ErrNoDeployment = errors.New("deployment not found")
+
+// ShortID condenses a deployment id the same way container/image names do
+// (first 8 lowercase chars). Exported so api/worker can recover records.
+func ShortID(id string) string {
+	id = strings.ToLower(id)
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
 
 func Open(path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "." && dir != "" {

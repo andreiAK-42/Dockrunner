@@ -444,6 +444,25 @@ func (c *Client) VolumeRemove(ctx context.Context, name string) error {
 	return c.cli.VolumeRemove(ctx, name, false)
 }
 
+// FindIDBySuffix находит контейнер (включая остановленные), имя которого
+// заканчивается на suffix. Используется для самовосстановления записей
+// о деплоях, потерянных из SQLite (например, после пересоздания контейнера
+// агента без volume): имя контейнера держит <app>-<shortID деплоя>.
+func (c *Client) FindIDBySuffix(ctx context.Context, suffix string) (string, error) {
+	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return "", err
+	}
+	for _, item := range list {
+		for _, name := range item.Names {
+			if strings.HasSuffix(strings.TrimPrefix(name, "/"), suffix) {
+				return item.ID, nil
+			}
+		}
+	}
+	return "", nil
+}
+
 func (c *Client) ContainerStatus(ctx context.Context, id string) (string, error) {
 	info, err := c.cli.ContainerInspect(ctx, id)
 	if err != nil {

@@ -759,6 +759,29 @@ func (h *Handler) loadDeployment(ctx context.Context, task Task, what string) (*
 		return dep, nil
 	}
 	if errors.Is(err, store.ErrNoDeployment) {
+		// Самовосстановление: запись могла потеряться вместе с SQLite,
+		// а контейнер в Docker продолжает работать — ищем по имени.
+		if containerID, findErr := h.dock.FindIDBySuffix(ctx, "-"+store.ShortID(task.DeploymentID)); findErr == nil && containerID != "" {
+			if live, inspErr := h.dock.InspectSpec(ctx, containerID); inspErr == nil {
+				name := strings.TrimPrefix(live.Name, "/")
+				appName := name
+				if suffix := "-" + store.ShortID(task.DeploymentID); strings.HasSuffix(appName, suffix) {
+					appName = strings.TrimSuffix(appName, suffix)
+				}
+				dep := &store.Deployment{
+					ID:        task.DeploymentID,
+					AppName:   appName,
+					Name:      name,
+					Image:     live.Image,
+					Container: containerID,
+					Status:    live.Status,
+				}
+				if saveErr := store.SaveDeployment(h.db, *dep); saveErr == nil {
+					h.logger.Info("deployment recovered from docker", "deployment", task.DeploymentID, "container", containerID)
+					return dep, nil
+				}
+			}
+		}
 		return nil, h.missingDeployment(ctx, task, what)
 	}
 	return nil, err

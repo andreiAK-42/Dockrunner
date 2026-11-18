@@ -151,12 +151,52 @@ func (s *Server) handleContainers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ContainersResponse{Data: out})
 }
 
+// findContainer ищет деплой в SQLite; если записи нет, пытается
+// восстановить её из Docker — контейнеры называются <app>-<shortID>,
+// поэтому по суффиксу имени находим живой контейнер и пересоздаём запись.
+// Это спасает случаи, когда SQLite агента потерян (пересоздание контейнера
+// агента без volume), а сами пользовательские контейнеры продолжают работать.
 func (s *Server) findContainer(r *http.Request) (*store.Deployment, bool) {
-	dep, err := store.GetDeployment(s.db, r.PathValue("id"))
-	if err != nil {
+	id := r.PathValue("id")
+	dep, err := store.GetDeployment(s.db, id)
+	if err == nil {
+		return dep, true
+	}
+	recovered := s.recoverDeployment(r.Context(), id)
+	if recovered == nil {
 		return nil, false
 	}
-	return dep, true
+	return recovered, true
+}
+
+// recoverDeployment находит контейнер по суффиксу "-<shortID>" и пересоздаёт
+// минимальную запись деплоя. Возвращает nil, если контейнер не найден.
+func (s *Server) recoverDeployment(ctx context.Context, id string) *store.Deployment {
+	containerID, err := s.dock.FindIDBySuffix(ctx, "-"+store.ShortID(id))
+	if err != nil || containerID == "" {
+		return nil
+	}
+	live, err := s.dock.InspectSpec(ctx, containerID)
+	if err != nil {
+		return nil
+	}
+	name := strings.TrimPrefix(live.Name, "/")
+	appName := name
+	if suffix := "-" + store.ShortID(id); strings.HasSuffix(appName, suffix) {
+		appName = strings.TrimSuffix(appName, suffix)
+	}
+	dep := &store.Deployment{
+		ID:        id,
+		AppName:   appName,
+		Name:      name,
+		Image:     live.Image,
+		Container: containerID,
+		Status:    live.Status,
+	}
+	if err := store.SaveDeployment(s.db, *dep); err != nil {
+		return nil
+	}
+	return dep
 }
 
 // liveStatus — живой статус контейнера; при ошибке docker — записанный,
