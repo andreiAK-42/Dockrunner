@@ -30,6 +30,6 @@ services:
         VITE_VICTORIA_METRICS_URL: ${VITE_VICTORIA_METRICS_URL:-http://localhost:8428}
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "5173:80"
     depends_on:
       - backend
