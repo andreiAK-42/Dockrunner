@@ -165,12 +165,12 @@ export default function ContainerDetailBase({
 
       {tab === 0 && (
         <Stack spacing={3}>
-          {isBuilding && (
+          {(isBuilding || record?.status === 'error') && (
             <Card>
               <CardContent>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
                   <Typography variant="h6" sx={{ fontWeight: 650, display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Terminal size={18} /> Сборка образа — живой лог
+                    <Terminal size={18} /> {isBuilding ? 'Сборка образа — живой лог' : 'Лог сборки (последняя попытка)'}
                   </Typography>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
                     <input
@@ -195,7 +195,7 @@ export default function ContainerDetailBase({
                     whiteSpace: 'pre-wrap',
                   }}
                 >
-                  {buildLog === null ? (buildLogError || 'Подключение к логу сборки...') : buildLog === '' ? 'Пока пусто — первые шаги появятся через пару секунд...' : buildLog}
+                  {buildLog === null ? (buildLogError || (isBuilding ? 'Подключение к логу сборки...' : 'Лог сборки недоступен — возможно, агент его не сохранил')) : buildLog === '' ? (isBuilding ? 'Пока пусто — первые шаги появятся через пару секунд...' : 'Лог пустой') : buildLog}
                 </Box>
               </CardContent>
             </Card>

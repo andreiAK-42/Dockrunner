@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
-import { fetchContainerSpec } from '../api/containers'
+import { fetchContainerSpec, fetchBuildLog } from '../api/containers'
 import { fetchMineContainers } from '../store/slices/containersSlice'
 import { refreshContainerByApp, removeContainer, startContainer, stopContainer, applyDockerCommand } from '../api/containers'
 import { useRealtimeStatus } from './useRealtime'
@@ -240,13 +240,31 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
 
   // Build log WebSocket handling
   useEffect(() => {
-    if (!isBuilding || !recordId) {
-      // Сброс состояния при смене контейнера/статуса — это синхронизация
-      // с внешним ресурсом (WS-поток сборки), а не каскадный рендер.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setBuildLog(null)
-      setBuildLogError('')
+    if (!recordId) {
       return
+    }
+
+    if (!isBuilding) {
+      // Сборка завершилась (успешно или с ошибкой) — живой поток больше
+      // недоступен/не нужен, подгружаем сохранённый лог по HTTP, чтобы
+      // причину падения было видно и после перехода статуса в error.
+      let alive = true
+      fetchBuildLog(recordId)
+        .then((res) => {
+          if (alive) {
+            setBuildLog(res.data || '')
+            setBuildLogError('')
+          }
+        })
+        .catch(() => {
+          if (alive) {
+            setBuildLog(null)
+            setBuildLogError('')
+          }
+        })
+      return () => {
+        alive = false
+      }
     }
 
     let alive = true
