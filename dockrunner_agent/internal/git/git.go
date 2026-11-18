@@ -139,14 +139,17 @@ func ListRemoteBranches(ctx context.Context, repoURL string) ([]string, error) {
 	return branches, nil
 }
 
-// ListLocalBranches lists all branches in a local repository
+// ListLocalBranches lists local branches in a repository.
+// Remote-tracking refs (origin/main, origin/HEAD и т.п.) не возвращаем:
+// это не ветки, и git fetch/clone --branch с ними падает
+// ("couldn't find remote ref origin/main").
 func ListLocalBranches(dir string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := exec.LookPath("git"); err != nil {
 		return nil, errors.New("git not installed")
 	}
-	cmd := exec.CommandContext(ctx, "git", "branch", "-a", "--format=%(refname:short)")
+	cmd := exec.CommandContext(ctx, "git", "branch", "--format=%(refname:short)")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -154,14 +157,9 @@ func ListLocalBranches(dir string) ([]string, error) {
 	}
 	var branches []string
 	seen := make(map[string]bool)
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "remotes/") {
-			continue
-		}
-		// Skip HEAD pointer
-		if line == "HEAD" {
+		if line == "" {
 			continue
 		}
 		if !seen[line] {
