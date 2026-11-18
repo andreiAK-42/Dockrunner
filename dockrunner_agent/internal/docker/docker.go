@@ -51,17 +51,21 @@ type RunSpec struct {
 	DiskGB float64
 	// Network — пользовательская docker-сеть ("" = default).
 	Network string
-	// DeploymentID/AppName попадают в docker-метки: по ним агент находит
-	// свой контейнер, если локальная SQLite потерялась.
+	// DeploymentID/AppName/Owner попадают в docker-метки: по ним агент
+	// находит свой контейнер, если локальная SQLite потерялась.
 	DeploymentID string
 	AppName      string
+	Owner        string
 }
 
 const (
-	// LabelDeployment/ LabelApp — метки, по которым восстанавливается
-	// потерянная запись о деплое (SQLite агента пересоздали без volume).
+	// LabelDeployment/LabelApp/LabelOwner — метки, по которым
+	// восстанавливается потерянная запись о деплое (SQLite агента
+	// пересоздали без volume). Owner нужен, чтобы не перепутать
+	// одноимённые приложения разных пользователей.
 	LabelDeployment = "dockrunner.deployment"
 	LabelApp        = "dockrunner.app"
+	LabelOwner      = "dockrunner.owner"
 )
 
 type Stats struct {
@@ -208,6 +212,9 @@ func (c *Client) Run(ctx context.Context, spec RunSpec) (string, error) {
 	if spec.AppName != "" {
 		labels[LabelApp] = spec.AppName
 	}
+	if spec.Owner != "" {
+		labels[LabelOwner] = spec.Owner
+	}
 	netConfig := &network.NetworkingConfig{}
 	hostConfig := &container.HostConfig{
 		PortBindings:  bindings,
@@ -349,6 +356,11 @@ type RecreateSpec struct {
 	RestartPolicy string            `json:"restart_policy"`
 	Network       string            `json:"network"`
 	WorkingDir    string            `json:"working_dir"`
+	// DeploymentID/AppName/Owner обновляют docker-метки при пересоздании:
+	// у контейнеров, созданных до появления меток, иначе их так и не будет.
+	DeploymentID string `json:"-"`
+	AppName      string `json:"-"`
+	Owner        string `json:"-"`
 }
 
 func (c *Client) Recreate(ctx context.Context, id string, spec RecreateSpec) (string, error) {
@@ -401,6 +413,22 @@ func (c *Client) Recreate(ctx context.Context, id string, spec RecreateSpec) (st
 	cfg.Image = spec.Image
 	cfg.Env = mapToEnv(spec.Env)
 	cfg.WorkingDir = spec.WorkingDir
+	// Копируем метки, чтобы не менять info.Config, и обновляем служебные:
+	// пересозданный контейнер должен находиться по метке деплоя/приложения.
+	labels := make(map[string]string, len(cfg.Labels)+3)
+	for k, v := range cfg.Labels {
+		labels[k] = v
+	}
+	if spec.DeploymentID != "" {
+		labels[LabelDeployment] = spec.DeploymentID
+	}
+	if spec.AppName != "" {
+		labels[LabelApp] = spec.AppName
+	}
+	if spec.Owner != "" {
+		labels[LabelOwner] = spec.Owner
+	}
+	cfg.Labels = labels
 	host := *info.HostConfig
 	host.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(spec.RestartPolicy)}
 	if spec.Network != "" {
@@ -498,17 +526,31 @@ func (c *Client) FindIDBySuffix(ctx context.Context, suffix string) (string, err
 		return "", err
 	}
 	imagePrefix := "app" + suffix + ":"
+	stoppedID := ""
 	for _, item := range list {
+		matched := false
 		for _, name := range item.Names {
 			if strings.HasSuffix(strings.TrimPrefix(name, "/"), suffix) {
-				return item.ID, nil
+				matched = true
+				break
 			}
 		}
-		if strings.HasPrefix(item.Image, imagePrefix) {
+		if !matched && strings.HasPrefix(item.Image, imagePrefix) {
+			matched = true
+		}
+		if !matched {
+			continue
+		}
+		// Приоритет работающему контейнеру: остановленный мог остаться
+		// от предыдущей попытки с тем же тегом образа.
+		if item.State == "running" {
 			return item.ID, nil
 		}
+		if stoppedID == "" {
+			stoppedID = item.ID
+		}
 	}
-	return "", nil
+	return stoppedID, nil
 }
 
 // FindIDByLabels находит контейнер (включая остановленные) по docker-меткам.
@@ -527,6 +569,60 @@ func (c *Client) FindIDByLabels(ctx context.Context, labels map[string]string) (
 		return "", nil
 	}
 	return list[0].ID, nil
+}
+
+// FindIDByApp находит контейнер приложения, даже если id деплоя уже другой:
+// повторный деплой мог не дойти до создания контейнера, а старый контейнер
+// приложения продолжает работать. Ищем по метке dockrunner.app, затем по
+// точному имени и по имени "<app>-...", отдавая предпочтение запущенным.
+// owner (если известен) отсекает чужие контейнеры с тем же именем приложения.
+func (c *Client) FindIDByApp(ctx context.Context, appName, owner string) (string, error) {
+	appName = strings.TrimSpace(strings.TrimPrefix(appName, "/"))
+	if appName == "" {
+		return "", nil
+	}
+	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return "", err
+	}
+	bestScore := 0
+	bestCreated := int64(0)
+	bestID := ""
+	for _, item := range list {
+		if owner != "" {
+			if labelOwner := item.Labels[LabelOwner]; labelOwner != "" && labelOwner != owner {
+				continue
+			}
+		}
+		score := 0
+		if item.Labels[LabelApp] == appName {
+			score = 3
+		} else {
+			for _, raw := range item.Names {
+				name := strings.TrimPrefix(raw, "/")
+				if name == appName {
+					score = 2
+					break
+				}
+				if strings.HasPrefix(name, appName+"-") {
+					score = 1
+				}
+			}
+		}
+		if score == 0 {
+			continue
+		}
+		if owner != "" && item.Labels[LabelOwner] == owner {
+			score += 5
+		}
+		if item.State == "running" {
+			score += 10
+		}
+		if score > bestScore || (score == bestScore && item.Created > bestCreated) {
+			bestScore, bestCreated, bestID = score, item.Created, item.ID
+		}
+	}
+	return bestID, nil
 }
 
 func (c *Client) ContainerStatus(ctx context.Context, id string) (string, error) {

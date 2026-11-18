@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { fetchContainerSpec, fetchBuildLog } from '../api/containers'
-import { fetchMineContainers } from '../store/slices/containersSlice'
+import { fetchMineContainers, containerStatusPatched } from '../store/slices/containersSlice'
 import { refreshContainerByApp, removeContainer, startContainer, stopContainer, applyDockerCommand } from '../api/containers'
 import { useRealtimeStatus } from './useRealtime'
 import { useContainerLogs } from './useContainerLogs'
@@ -124,8 +124,9 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
       const actualStatus = specRes.data.status
 
       if (actualStatus !== currentRecord.status) {
-        // Note: We can't dispatch containerStatusPatched here because we don't have it in the hook
-        // The component should handle this or we need to pass it in
+        // Бэкенд уже обновил статус в БД, но Redux мог остаться со старым
+        // (например, после сообщения «контейнер не найден» в логах).
+        dispatch(containerStatusPatched({ id: currentRecord.id, status: actualStatus }))
         setSyncSuccess(`Статус исправлен: было "${currentRecord.status}", стало "${actualStatus}"`)
       } else {
         setSyncSuccess('Статус актуален, изменений нет')

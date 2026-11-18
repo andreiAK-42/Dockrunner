@@ -232,12 +232,12 @@ func (h *Handler) GetCheck(c *gin.Context) {
 
 // Default container resource limits
 const (
-	DefaultCPUCores  = 0.25
-	DefaultMemoryGB  = 0.5  // 512 MB
-	DefaultDiskGB    = 1.0
-	MinCPUCores      = 0.01 // prevent zero/negative
-	MinMemoryGB      = 0.01 // 10 MB minimum
-	MinDiskGB        = 0.1  // 100 MB minimum
+	DefaultCPUCores = 0.25
+	DefaultMemoryGB = 0.5 // 512 MB
+	DefaultDiskGB   = 1.0
+	MinCPUCores     = 0.01 // prevent zero/negative
+	MinMemoryGB     = 0.01 // 10 MB minimum
+	MinDiskGB       = 0.1  // 100 MB minimum
 )
 
 type RunRequest struct {
@@ -536,7 +536,7 @@ func (h *Handler) ContainerLogStream(c *gin.Context) {
 		h.closeStreamNotFound(clientConn, "application not found")
 		return
 	}
-	wsURL, err := h.service.AgentContainerLogStreamURL(c.Request.Context(), rec.NodeID, rec.ID)
+	wsURL, err := h.service.AgentContainerLogStreamURL(c.Request.Context(), rec.NodeID, rec.ID, rec.AppName, rec.OwnerLogin)
 	if err != nil {
 		msg := "logs unavailable"
 		if errors.Is(err, agents.ErrNoAPIURL) {

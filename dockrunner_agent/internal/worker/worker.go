@@ -73,21 +73,21 @@ type Task struct {
 }
 
 type Event struct {
-	Type               string            `json:"type"`
-	AgentID            string            `json:"agent_id"`
-	AppID              string            `json:"app_id"`
-	AppName            string            `json:"app_name"`
-	OwnerLogin         string            `json:"owner_login"`
-	Image              string            `json:"image"`
-	DeploymentID       string            `json:"deployment_id"`
-	DetectedDockerfile bool              `json:"detected_dockerfile"`
-	ComposeFile        string            `json:"compose_file"`
-	Services           []string          `json:"services,omitempty"`
-	Branches           []string          `json:"branches,omitempty"`
+	Type               string   `json:"type"`
+	AgentID            string   `json:"agent_id"`
+	AppID              string   `json:"app_id"`
+	AppName            string   `json:"app_name"`
+	OwnerLogin         string   `json:"owner_login"`
+	Image              string   `json:"image"`
+	DeploymentID       string   `json:"deployment_id"`
+	DetectedDockerfile bool     `json:"detected_dockerfile"`
+	ComposeFile        string   `json:"compose_file"`
+	Services           []string `json:"services,omitempty"`
+	Branches           []string `json:"branches,omitempty"`
 	// DetectedEnvVars — переменные окружения из .env/.env.example
-	DetectedEnvVars map[string]string   `json:"detected_env_vars,omitempty"`
+	DetectedEnvVars map[string]string `json:"detected_env_vars,omitempty"`
 	// DetectedPorts — порты из Dockerfile EXPOSE и docker-compose ports/expose
-	DetectedPorts   []DetectedPort      `json:"detected_ports,omitempty"`
+	DetectedPorts []DetectedPort `json:"detected_ports,omitempty"`
 	// ParentApp — головное приложение для событий сервис-контейнеров
 	// (нужно центру, чтобы снять oplock родительской операции).
 	ParentApp string     `json:"parent_app,omitempty"`
@@ -99,7 +99,7 @@ type Event struct {
 type DetectedPort struct {
 	ContainerPort int    `json:"container_port"`
 	Protocol      string `json:"protocol"`
-	Source        string `json:"source"` // "dockerfile" or "compose"
+	Source        string `json:"source"`            // "dockerfile" or "compose"
 	Service       string `json:"service,omitempty"` // service name for compose
 }
 
@@ -659,6 +659,7 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		Network:       network,
 		DeploymentID:  deploymentID,
 		AppName:       appName,
+		Owner:         task.Owner,
 	})
 	if err != nil {
 		h.builds.Append(deploymentID, "ERROR: запуск не удался: "+err.Error())
@@ -757,9 +758,11 @@ func (h *Handler) deployCompose(ctx context.Context, task Task, dir, compose str
 	return nil
 }
 
-// loadDeployment достаёт развёртывание из SQLite.
+// loadDeployment достаёт развёртывание из SQLite. allowAppFallback разрешает
+// найти контейнер по имени приложения (для start/stop/restart, где нужен
+// только container id; для refresh это опасно — потеряются порты/тома).
 // Неизвестный id — постоянная ошибка (ретрай не поможет), центр уведомляется.
-func (h *Handler) loadDeployment(ctx context.Context, task Task, what string) (*store.Deployment, error) {
+func (h *Handler) loadDeployment(ctx context.Context, task Task, what string, allowAppFallback bool) (*store.Deployment, error) {
 	dep, err := store.GetDeployment(h.db, task.DeploymentID)
 	if err == nil {
 		return dep, nil
@@ -771,6 +774,11 @@ func (h *Handler) loadDeployment(ctx context.Context, task Task, what string) (*
 		containerID, findErr := h.dock.FindIDByLabels(ctx, map[string]string{docker.LabelDeployment: task.DeploymentID})
 		if findErr != nil || containerID == "" {
 			containerID, findErr = h.dock.FindIDBySuffix(ctx, "-"+store.ShortID(task.DeploymentID))
+		}
+		// Запись в центре может ссылаться на неудачный деплой, а работать
+		// может контейнер предыдущего деплоя того же приложения.
+		if (findErr != nil || containerID == "") && allowAppFallback && task.AppName != "" {
+			containerID, findErr = h.dock.FindIDByApp(ctx, task.AppName, task.Owner)
 		}
 		if findErr == nil && containerID != "" {
 			if live, inspErr := h.dock.InspectSpec(ctx, containerID); inspErr == nil {
@@ -802,7 +810,7 @@ func (h *Handler) loadDeployment(ctx context.Context, task Task, what string) (*
 }
 
 func (h *Handler) refresh(ctx context.Context, task Task) error {
-	dep, err := h.loadDeployment(ctx, task, "обновление")
+	dep, err := h.loadDeployment(ctx, task, "обновление", false)
 	if err != nil {
 		return err
 	}
@@ -860,7 +868,7 @@ func (h *Handler) refresh(ctx context.Context, task Task) error {
 }
 
 func (h *Handler) stop(ctx context.Context, task Task) error {
-	dep, err := h.loadDeployment(ctx, task, "остановка")
+	dep, err := h.loadDeployment(ctx, task, "остановка", true)
 	if err != nil {
 		return err
 	}
@@ -889,7 +897,7 @@ func (h *Handler) publishStopped(ctx context.Context, task Task, dep *store.Depl
 }
 
 func (h *Handler) restart(ctx context.Context, task Task) error {
-	dep, err := h.loadDeployment(ctx, task, "перезапуск")
+	dep, err := h.loadDeployment(ctx, task, "перезапуск", true)
 	if err != nil {
 		return err
 	}

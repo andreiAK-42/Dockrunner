@@ -33,23 +33,23 @@ var (
 type DetectedPort struct {
 	ContainerPort int    `json:"container_port"`
 	Protocol      string `json:"protocol"`
-	Source        string `json:"source"` // "dockerfile" or "compose"
+	Source        string `json:"source"`            // "dockerfile" or "compose"
 	Service       string `json:"service,omitempty"` // service name for compose
 }
 
 type Check struct {
-	ID                 string         `json:"id"`
-	AppName            string         `json:"app_name"`
-	RepoURL            string         `json:"repo_url"`
-	NodeID             string         `json:"node_id"`
-	Status             string         `json:"status"`
-	DetectedDockerfile bool           `json:"detected_dockerfile"`
-	ComposeFile        string         `json:"compose_file"`
-	Services           []string       `json:"services"`
-	Branches           []string       `json:"branches,omitempty"`
+	ID                 string            `json:"id"`
+	AppName            string            `json:"app_name"`
+	RepoURL            string            `json:"repo_url"`
+	NodeID             string            `json:"node_id"`
+	Status             string            `json:"status"`
+	DetectedDockerfile bool              `json:"detected_dockerfile"`
+	ComposeFile        string            `json:"compose_file"`
+	Services           []string          `json:"services"`
+	Branches           []string          `json:"branches,omitempty"`
 	DetectedEnvVars    map[string]string `json:"detected_env_vars,omitempty"`
-	DetectedPorts      []DetectedPort `json:"detected_ports,omitempty"`
-	Error              string         `json:"error"`
+	DetectedPorts      []DetectedPort    `json:"detected_ports,omitempty"`
+	Error              string            `json:"error"`
 	owner              string
 	expires            time.Time
 }
@@ -300,6 +300,71 @@ func (s *Service) agentPost(ctx context.Context, nodeID, suffix string, payload 
 	return data, nil
 }
 
+// agentContainerIDs — id деплоев, которые имеет смысл спросить у агента
+// для этой записи: сам id, родительский деплой compose-сервиса и другие
+// деплои того же приложения на том же узле. Последние спасают ситуацию,
+// когда новый деплой не дошёл до создания контейнера, а контейнер прошлого
+// деплоя этого приложения продолжает работать.
+func (s *Service) agentContainerIDs(ctx context.Context, rec *admin.ContainerRecord) []string {
+	const maxIDs = 5
+	ids := []string{rec.ID}
+	seen := map[string]bool{rec.ID: true}
+	add := func(id string) {
+		if id == "" || seen[id] || len(ids) >= maxIDs {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	// Составные id сервисов compose: <uuid>-<service> (uuid — 36 символов).
+	if len(rec.ID) > 36 && rec.ID[36] == '-' {
+		add(rec.ID[:36])
+	}
+	recs, err := s.store.ListByOwner(ctx, rec.OwnerLogin)
+	if err != nil {
+		return ids
+	}
+	for _, sibling := range recs {
+		if len(ids) >= maxIDs {
+			break
+		}
+		if sibling.ID == rec.ID || sibling.NodeID != rec.NodeID || sibling.AppName != rec.AppName {
+			continue
+		}
+		add(sibling.ID)
+	}
+	return ids
+}
+
+// syncStatusFromSpec сверяет статус из ответа агента с записью в БД и
+// обновляет её, если они разошлись (например, агент восстановил запись
+// о живом контейнере, а в БД остался "stopped").
+func (s *Service) syncStatusFromSpec(ctx context.Context, rec *admin.ContainerRecord, body []byte) {
+	// Агент отдаёт spec плоским объектом; обработчик заворачивает его в
+	// {"data": ...}. Поддерживаем оба варианта, чтобы статус не «залипал».
+	var payload struct {
+		Status string `json:"status"`
+		Data   struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return
+	}
+	status := payload.Status
+	if status == "" {
+		status = payload.Data.Status
+	}
+	if status == "" || status == rec.Status {
+		return
+	}
+	if err := s.store.SetContainerStatus(ctx, rec.ID, status); err != nil {
+		return
+	}
+	rec.Status = status
+	s.publishContainer(rec.OwnerLogin, *rec)
+}
+
 func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec map[string]any) ([]byte, error) {
 	rec, err := s.store.GetContainer(ctx, id)
 	if err != nil {
@@ -318,14 +383,14 @@ func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec 
 	}
 	// Keep the central list in sync with the live container specification.
 	var updated struct {
-		Image          string `json:"image"`
-		Ports          []struct {
+		Image string `json:"image"`
+		Ports []struct {
 			Host      int `json:"host"`
 			Container int `json:"container"`
 		} `json:"ports"`
-		Volumes        []admin.VolumeSpec `json:"volumes"`
-		Env            map[string]string  `json:"env"`
-		RestartPolicy  string             `json:"restart_policy"`
+		Volumes       []admin.VolumeSpec `json:"volumes"`
+		Env           map[string]string  `json:"env"`
+		RestartPolicy string             `json:"restart_policy"`
 	}
 	if raw, marshalErr := json.Marshal(spec); marshalErr == nil {
 		_ = json.Unmarshal(raw, &updated)
@@ -355,28 +420,6 @@ func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec 
 	return responseBody, nil
 }
 
-// syncStatusFromSpec сверяет статус из ответа агента с записью в БД и
-// обновляет её, если они разошлись (например, агент восстановил запись
-// о живом контейнере, а в БД остался "stopped").
-func (s *Service) syncStatusFromSpec(ctx context.Context, rec *admin.ContainerRecord, body []byte) {
-	var payload struct {
-		Data struct {
-			Status string `json:"status"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil || payload.Data.Status == "" {
-		return
-	}
-	if payload.Data.Status == rec.Status {
-		return
-	}
-	if err := s.store.SetContainerStatus(ctx, rec.ID, payload.Data.Status); err != nil {
-		return
-	}
-	rec.Status = payload.Data.Status
-	s.publishContainer(rec.OwnerLogin, *rec)
-}
-
 func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, error) {
 	rec, err := s.store.GetContainer(ctx, id)
 	if err != nil {
@@ -386,33 +429,32 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 		return nil, ErrNotFound
 	}
 
-	// Try to get spec from agent with the given ID
-	body, err := s.agentGet(ctx, rec.NodeID, "/containers/"+id+"/spec")
-	if err == nil {
+	// Спрашиваем агента по id записи, затем по id других деплоев того же
+	// приложения (и по родителю compose-сервиса). app_name/owner позволяют
+	// агенту найти работающий контейнер, даже если он создан другим деплоем.
+	appQuery := "?app_name=" + url.QueryEscape(rec.AppName) + "&owner=" + url.QueryEscape(rec.OwnerLogin)
+	var firstErr error
+	for _, agentID := range s.agentContainerIDs(ctx, rec) {
+		body, reqErr := s.agentGet(ctx, rec.NodeID, "/containers/"+agentID+"/spec"+appQuery)
+		if reqErr != nil {
+			if firstErr == nil {
+				firstErr = reqErr
+			}
+			// Другие id пробуем только если агент ответил «не найдено»:
+			// при недоступном узле это лишь умножит таймауты.
+			if !agentNotFound(reqErr) {
+				break
+			}
+			continue
+		}
 		s.syncStatusFromSpec(ctx, rec, body)
 		return body, nil
 	}
+	err = firstErr
 
-	// If the ID looks like a multi-service container (contains -serviceName),
-	// try to get spec from the parent deployment ID
-	if strings.Contains(id, "-") {
-		parts := strings.Split(id, "-")
-		if len(parts) >= 2 {
-			parentID := strings.Join(parts[:len(parts)-1], "-")
-			if parentID != id {
-				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, "/containers/"+parentID+"/spec")
-				if parentErr == nil {
-					s.syncStatusFromSpec(ctx, rec, parentBody)
-					return parentBody, nil
-				}
-			}
-		}
-	}
-
-	// If both attempts failed, check if it's a 404 (container not found on agent)
+	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return a spec from the DB record
-	errStr := err.Error()
-	if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") || strings.Contains(errStr, "not found") {
+	if agentNotFound(err) {
 		// Container doesn't exist on agent anymore - update DB status
 		_ = s.store.SetContainerStatus(ctx, id, "stopped")
 		rec.Status = "stopped"
@@ -465,39 +507,31 @@ func (s *Service) ContainerStats(ctx context.Context, owner, id string) (*Contai
 		return nil, ErrNotFound
 	}
 
-	// Try to get stats from agent with the given ID
-	body, err := s.agentGet(ctx, rec.NodeID, "/containers/"+id+"/stats")
-	if err == nil {
+	// Спрашиваем агента по id записи и по другим деплоям этого приложения.
+	appQuery := "?app_name=" + url.QueryEscape(rec.AppName) + "&owner=" + url.QueryEscape(rec.OwnerLogin)
+	var firstErr error
+	for _, agentID := range s.agentContainerIDs(ctx, rec) {
+		body, reqErr := s.agentGet(ctx, rec.NodeID, "/containers/"+agentID+"/stats"+appQuery)
+		if reqErr != nil {
+			if firstErr == nil {
+				firstErr = reqErr
+			}
+			if !agentNotFound(reqErr) {
+				break
+			}
+			continue
+		}
 		var stats ContainerStats
 		if err := json.Unmarshal(body, &stats); err != nil {
 			return nil, err
 		}
 		return &stats, nil
 	}
+	err = firstErr
 
-	// If the ID looks like a multi-service container (contains -serviceName),
-	// try to get stats from the parent deployment ID
-	if strings.Contains(id, "-") {
-		parts := strings.Split(id, "-")
-		if len(parts) >= 2 {
-			parentID := strings.Join(parts[:len(parts)-1], "-")
-			if parentID != id {
-				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, "/containers/"+parentID+"/stats")
-				if parentErr == nil {
-					var stats ContainerStats
-					if err := json.Unmarshal(parentBody, &stats); err != nil {
-						return nil, err
-					}
-					return &stats, nil
-				}
-			}
-		}
-	}
-
-	// If both attempts failed, check if it's a 404 (container not found on agent)
+	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return zeros (container is stopped)
-	errStr := err.Error()
-	if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") || strings.Contains(errStr, "not found") {
+	if agentNotFound(err) {
 		// Container doesn't exist on agent anymore - update DB status
 		_ = s.store.SetContainerStatus(ctx, id, "stopped")
 		return &ContainerStats{CPUPercent: 0, MemMB: 0}, nil
@@ -540,9 +574,21 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 		tail = 200
 	}
 
-	// Try to get logs from agent with the given ID
-	body, err := s.agentGet(ctx, rec.NodeID, fmt.Sprintf("/containers/%s/logs?tail=%d", id, tail))
-	if err == nil {
+	// Спрашиваем агента по id записи и по другим деплоям этого приложения:
+	// работающий контейнер мог остаться от предыдущего деплоя.
+	appQuery := "&app_name=" + url.QueryEscape(rec.AppName) + "&owner=" + url.QueryEscape(rec.OwnerLogin)
+	var firstErr error
+	for _, agentID := range s.agentContainerIDs(ctx, rec) {
+		body, reqErr := s.agentGet(ctx, rec.NodeID, fmt.Sprintf("/containers/%s/logs?tail=%d", agentID, tail)+appQuery)
+		if reqErr != nil {
+			if firstErr == nil {
+				firstErr = reqErr
+			}
+			if !agentNotFound(reqErr) {
+				break
+			}
+			continue
+		}
 		var payload struct {
 			Data string `json:"data"`
 		}
@@ -551,32 +597,11 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 		}
 		return payload.Data, nil
 	}
+	err = firstErr
 
-	// If the ID looks like a multi-service container (contains -serviceName),
-	// try to get logs from the parent deployment ID
-	if strings.Contains(id, "-") {
-		parts := strings.Split(id, "-")
-		if len(parts) >= 2 {
-			parentID := strings.Join(parts[:len(parts)-1], "-")
-			if parentID != id {
-				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, fmt.Sprintf("/containers/%s/logs?tail=%d", parentID, tail))
-				if parentErr == nil {
-					var payload struct {
-						Data string `json:"data"`
-					}
-					if err := json.Unmarshal(parentBody, &payload); err != nil {
-						return "", err
-					}
-					return payload.Data, nil
-				}
-			}
-		}
-	}
-
-	// If both attempts failed, check if it's a 404 (container not found on agent)
+	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return empty logs (container is stopped)
-	errStr := err.Error()
-	if strings.Contains(errStr, "404") || strings.Contains(errStr, "Not Found") || strings.Contains(errStr, "not found") {
+	if agentNotFound(err) {
 		// Container doesn't exist on agent anymore - update DB status
 		_ = s.store.SetContainerStatus(ctx, id, "stopped")
 		return "Контейнер не найден на узле (возможно, был удален). Статус обновлен на 'stopped'.", nil
@@ -590,6 +615,16 @@ func trimSlash(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// agentNotFound сообщает, что агент ответил 404 (деплой/контейнер не найден),
+// а не что узел недоступен или Docker вернул другую ошибку.
+func agentNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "404") || strings.Contains(msg, "Not Found") || strings.Contains(msg, "not found")
 }
 
 func (s *Service) StartCheck(ctx context.Context, owner, appName, repoURL, nodeID, branch string) (*Check, error) {
@@ -728,7 +763,7 @@ type RunInput struct {
 	DiskGB        float64           `json:"disk_gb"`
 	DurationHours float64           `json:"duration_hours"`
 	// Branch — git branch to deploy (required when repo_url is set)
-	Branch      string            `json:"branch"`
+	Branch string `json:"branch"`
 	// Services — сервисы compose (пусто = один контейнер).
 	// Каждый сервис станет записью «приложение-сервис» с теми же лимитами.
 	Services  []string `json:"services"`
@@ -975,7 +1010,9 @@ func (s *Service) AgentBuildLogStreamURL(ctx context.Context, nodeID, deployment
 }
 
 // AgentContainerLogStreamURL builds the worker WebSocket URL for live logs.
-func (s *Service) AgentContainerLogStreamURL(ctx context.Context, nodeID, deploymentID string) (string, error) {
+// app_name/owner передаются агенту, чтобы он нашёл контейнер приложения,
+// даже если запись в центре ссылается на другой (неудачный) деплой.
+func (s *Service) AgentContainerLogStreamURL(ctx context.Context, nodeID, deploymentID, appName, owner string) (string, error) {
 	apiURL, err := s.agents.AgentApiURL(ctx, nodeID)
 	if err != nil {
 		return "", err
@@ -987,7 +1024,7 @@ func (s *Service) AgentContainerLogStreamURL(ctx context.Context, nodeID, deploy
 	case strings.HasPrefix(ws, "http://"):
 		ws = "ws://" + strings.TrimPrefix(ws, "http://")
 	}
-	return trimSlash(ws) + "/containers/" + url.PathEscape(deploymentID) + "/logs/stream?token=" + url.QueryEscape(s.agentToken) + "&history=0", nil
+	return trimSlash(ws) + "/containers/" + url.PathEscape(deploymentID) + "/logs/stream?token=" + url.QueryEscape(s.agentToken) + "&history=0&app_name=" + url.QueryEscape(appName) + "&owner=" + url.QueryEscape(owner), nil
 }
 
 // AdminStopContainer stops a container by deployment ID (admin level, no owner check).
@@ -1106,11 +1143,11 @@ func (s *Service) RequestContainerUpdate(ctx context.Context, owner, deploymentI
 		getOrDefaultFloat64(params, "cpu_cores", rec.CPUCores),
 		getOrDefaultFloat64(params, "memory_gb", rec.MemoryGB),
 		getOrDefaultFloat64(params, "disk_gb", rec.DiskGB),
-		0, // duration_hours not applicable for updates
+		0,  // duration_hours not applicable for updates
 		"", // branch empty for updates
 		servicesJSON,
 		"", // build_mode empty for updates
-		0, // price = 0 for updates
+		0,  // price = 0 for updates
 		"pending",
 		"update",
 		deploymentID,

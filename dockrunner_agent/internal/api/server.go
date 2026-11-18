@@ -161,9 +161,16 @@ func (s *Server) findContainer(r *http.Request) (*store.Deployment, bool) {
 	id := r.PathValue("id")
 	dep, err := store.GetDeployment(s.db, id)
 	if err == nil {
-		return dep, true
+		// Запись есть, но контейнер мог быть удалён вручную. Тогда пробуем
+		// восстановить деплой по живому контейнеру приложения; если Docker
+		// недоступен по другой причине — отдаём запись как есть.
+		if _, inspectErr := s.dock.InspectSpec(r.Context(), dep.Container); inspectErr == nil || !docker.IsMissing(inspectErr) {
+			return dep, true
+		}
 	}
-	recovered := s.recoverDeployment(r.Context(), id)
+	// app_name/owner присылает бэкенд: по ним можно найти работающий
+	// контейнер, даже если деплой в SQLite записан под другим id.
+	recovered := s.recoverDeployment(r.Context(), id, r.URL.Query().Get("app_name"), r.URL.Query().Get("owner"))
 	if recovered == nil {
 		return nil, false
 	}
@@ -171,12 +178,18 @@ func (s *Server) findContainer(r *http.Request) (*store.Deployment, bool) {
 }
 
 // recoverDeployment находит контейнер по docker-метке деплоя (или по
-// суффиксу "-<shortID>" для старых контейнеров без меток) и пересоздаёт
-// минимальную запись деплоя. Возвращает nil, если контейнер не найден.
-func (s *Server) recoverDeployment(ctx context.Context, id string) *store.Deployment {
+// суффиксу "-<shortID>" для старых контейнеров без меток, или по имени
+// приложения) и пересоздаёт минимальную запись деплоя.
+// Возвращает nil, если контейнер не найден.
+func (s *Server) recoverDeployment(ctx context.Context, id, appName, owner string) *store.Deployment {
 	containerID, err := s.dock.FindIDByLabels(ctx, map[string]string{docker.LabelDeployment: id})
 	if err != nil || containerID == "" {
 		containerID, err = s.dock.FindIDBySuffix(ctx, "-"+store.ShortID(id))
+	}
+	// Запись в центре может ссылаться на неудачный деплой, в то время как
+	// предыдущий контейнер этого же приложения продолжает работать.
+	if (err != nil || containerID == "") && appName != "" {
+		containerID, err = s.dock.FindIDByApp(ctx, appName, owner)
 	}
 	if err != nil || containerID == "" {
 		return nil
@@ -186,7 +199,11 @@ func (s *Server) recoverDeployment(ctx context.Context, id string) *store.Deploy
 		return nil
 	}
 	name := strings.TrimPrefix(live.Name, "/")
-	appName := live.Labels[docker.LabelApp]
+	// Имя приложения: явно переданное центром важнее восстановленного по
+	// имени контейнера (у пользовательских контейнеров имя произвольное).
+	if appName == "" {
+		appName = live.Labels[docker.LabelApp]
+	}
 	if appName == "" {
 		appName = name
 		if suffix := "-" + store.ShortID(id); strings.HasSuffix(appName, suffix) {
@@ -200,6 +217,22 @@ func (s *Server) recoverDeployment(ctx context.Context, id string) *store.Deploy
 		Image:     live.Image,
 		Container: containerID,
 		Status:    live.Status,
+		Owner:     owner,
+	}
+	// Если запись уже была (просто её контейнер удалён), сохраняем порты,
+	// тома, env и репозиторий — иначе refresh пересоздаст контейнер без них.
+	if existing, getErr := store.GetDeployment(s.db, id); getErr == nil {
+		existing.Container = containerID
+		existing.Image = live.Image
+		existing.Name = name
+		existing.Status = live.Status
+		if existing.AppName == "" {
+			existing.AppName = appName
+		}
+		if existing.Owner == "" {
+			existing.Owner = owner
+		}
+		dep = existing
 	}
 	if err := store.SaveDeployment(s.db, *dep); err != nil {
 		return nil
@@ -397,6 +430,9 @@ func (s *Server) handleContainerRecreate(w http.ResponseWriter, r *http.Request)
 		RestartPolicy: req.RestartPolicy,
 		Network:       req.Network,
 		WorkingDir:    req.WorkingDir,
+		DeploymentID:  dep.ID,
+		AppName:       dep.AppName,
+		Owner:         dep.Owner,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
