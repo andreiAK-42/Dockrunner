@@ -15,7 +15,8 @@ export function shellArg(value: string): string {
  */
 export function specEnvArgs(spec: ContainerSpec | null): string {
   if (!spec) return ''
-  return Object.entries(spec.env)
+  // Бэкенд может вернуть env: null (контейнер без переменных или недоступен)
+  return Object.entries(spec.env ?? {})
     .map(([key, value]) => `--env ${shellArg(`${key}=${value}`)}`)
     .join(' ')
 }
@@ -35,11 +36,11 @@ export function buildDockerRun(spec: ContainerSpec | null, envArgs: string): str
   if (!spec) return ''
   const args = ['docker run -d', `--name ${shellArg(spec.name)}`]
 
-  for (const port of spec.ports) {
+  for (const port of spec.ports ?? []) {
     args.push(`-p ${port.host}:${port.container}`)
   }
 
-  args.push(...spec.volumes.map(formatVolumeMount), envArgs)
+  args.push(...(spec.volumes ?? []).map(formatVolumeMount), envArgs)
 
   if (spec.restart_policy) args.push(`--restart ${shellArg(spec.restart_policy)}`)
   if (spec.network) args.push(`--network ${shellArg(spec.network)}`)

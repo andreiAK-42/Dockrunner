@@ -78,8 +78,7 @@ export interface ContainerSpec {
   image: string
   status: string
   ports: { host: number; container: number }[]
-  volumes: { name: string; host_path: string; container_path: string }[]
-  env: Record<string, string>
+  env: Record<string, string> | null
   entrypoint?: string[]
   cmd?: string[]
   restart_policy?: string

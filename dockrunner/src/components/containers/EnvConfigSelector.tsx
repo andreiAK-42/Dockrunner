@@ -7,7 +7,7 @@ interface EnvConfigSelectorProps {
   selectedEnvConfig: EnvConfig | undefined
   envConfigId: string
   onEnvConfigChange: (id: string) => void
-  spec: { env: Record<string, string> } | null
+  spec: { env: Record<string, string> | null } | null
 }
 
 export default function EnvConfigSelector({
@@ -39,7 +39,7 @@ export default function EnvConfigSelector({
         </Box>
       ) : (
         <Box>
-          {!spec || Object.keys(spec.env).length === 0 ? (
+          {!spec?.env || Object.keys(spec.env).length === 0 ? (
             <Typography variant="body2" color="text.secondary">Нет env</Typography>
           ) : (
             Object.entries(spec.env).map(([k, v]) => (
