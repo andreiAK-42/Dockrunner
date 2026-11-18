@@ -607,6 +607,11 @@ func (h *Handler) deploy(ctx context.Context, task Task) error {
 			return h.failDeploy(ctx, task, "выбран Dockerfile, но файл не найден", errNoDockerfile)
 		}
 		tag := "app-" + shortID(task.DeploymentID) + ":latest"
+		// Запись «building» появляется до начала сборки: иначе API агента
+		// отвечает центру 404 всё время сборки, и централь помечает
+		// контейнер «stopped», хотя образ ещё собирается.
+		name, _ := sanitizeContainerName(task.AppName, task.ContainerName, task.DeploymentID)
+		h.markBuilding(task, task.Ports, task.DeploymentID, task.AppName, name, tag, "", "", "")
 		if err := h.buildDockerfile(ctx, task, dir, dockerfile, tag); err != nil {
 			return h.failDeploy(ctx, task, "образ не собран: "+err.Error(), err)
 		}
@@ -622,6 +627,42 @@ func (h *Handler) deploy(ctx context.Context, task Task) error {
 		return h.deployCompose(ctx, task, dir, compose)
 	}
 	return h.failDeploy(ctx, task, "неизвестный режим сборки: "+mode, errNoDockerfile)
+}
+
+// markBuilding сохраняет запись о деплое со статусом "building" до начала
+// сборки/запуска, чтобы API агента уже знал о нём и отвечал сохранённой
+// спецификацией вместо 404. Без этого централь помечал контейнер «stopped»
+// в первые же секунды сборки. Существующая запись перечитывается, чтобы не
+// потерять поля, которых нет в задаче; Container сбрасывается — старый
+// контейнер будет удалён при запуске нового.
+func (h *Handler) markBuilding(task Task, ports []PortTask, deploymentID, appName, name, image, parentID, parentApp, service string) {
+	portsJSON, _ := json.Marshal(ports)
+	volumesJSON, _ := json.Marshal(task.Volumes)
+	envJSON, _ := json.Marshal(task.Env)
+	dep, err := store.GetDeployment(h.db, deploymentID)
+	if err != nil {
+		dep = &store.Deployment{ID: deploymentID}
+	}
+	dep.AppID = task.AppID
+	dep.AppName = appName
+	dep.Owner = task.Owner
+	dep.RepoURL = task.RepoURL
+	dep.Name = name
+	dep.Image = image
+	dep.Container = ""
+	dep.Status = "building"
+	dep.Ports = string(portsJSON)
+	dep.Volumes = string(volumesJSON)
+	dep.Env = string(envJSON)
+	dep.CPUCores = task.CPUCores
+	dep.MemoryGB = task.MemoryGB
+	dep.ParentID = parentID
+	dep.ParentApp = parentApp
+	dep.Service = service
+	dep.Branch = task.Branch
+	if err := store.SaveDeployment(h.db, *dep); err != nil {
+		h.logger.Warn("building record not saved", "deployment", deploymentID, "error", err)
+	}
 }
 
 // deploySingle запускает один контейнер с лимитами и сообщает центру.
@@ -640,6 +681,7 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 	if err != nil {
 		return h.failChild(ctx, task, parentApp, deploymentID, appName, err.Error(), err)
 	}
+	h.markBuilding(task, ports, deploymentID, appName, name, image, parentID, parentApp, service)
 	portsJSON, _ := json.Marshal(ports)
 	volumesJSON, _ := json.Marshal(task.Volumes)
 	envJSON, _ := json.Marshal(task.Env)
@@ -742,6 +784,8 @@ func (h *Handler) deployCompose(ctx context.Context, task Task, dir, compose str
 		if i == 0 {
 			ports = task.Ports
 		}
+		childName, _ := sanitizeContainerName(childApp, childApp, childID)
+		h.markBuilding(task, ports, childID, childApp, childName, "", task.DeploymentID, task.AppName, svc.Name)
 		image, err := h.buildComposeService(ctx, task, svc)
 		if err != nil {
 			failed++

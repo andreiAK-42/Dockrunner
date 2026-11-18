@@ -455,10 +455,14 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return a spec from the DB record
 	if agentNotFound(err) {
-		// Container doesn't exist on agent anymore - update DB status
-		_ = s.store.SetContainerStatus(ctx, id, "stopped")
-		rec.Status = "stopped"
-		s.publishContainer(rec.OwnerLogin, *rec)
+		// Пока идёт сборка, отсутствие контейнера на узле — норма, а не
+		// признак остановки: статус не трогаем.
+		if rec.Status != "building" {
+			// Container doesn't exist on agent anymore - update DB status
+			_ = s.store.SetContainerStatus(ctx, id, "stopped")
+			rec.Status = "stopped"
+			s.publishContainer(rec.OwnerLogin, *rec)
+		}
 
 		// Build spec response from DB record. Формат должен совпадать с
 		// ответом агента (host/container), иначе фронт получает undefined.
@@ -532,8 +536,11 @@ func (s *Service) ContainerStats(ctx context.Context, owner, id string) (*Contai
 	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return zeros (container is stopped)
 	if agentNotFound(err) {
-		// Container doesn't exist on agent anymore - update DB status
-		_ = s.store.SetContainerStatus(ctx, id, "stopped")
+		// Во время сборки контейнера ещё нет — это не «stopped».
+		if rec.Status != "building" {
+			// Container doesn't exist on agent anymore - update DB status
+			_ = s.store.SetContainerStatus(ctx, id, "stopped")
+		}
 		return &ContainerStats{CPUPercent: 0, MemMB: 0}, nil
 	}
 
@@ -602,6 +609,10 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return empty logs (container is stopped)
 	if agentNotFound(err) {
+		// Во время сборки контейнера ещё нет — статус не трогаем.
+		if rec.Status == "building" {
+			return "Контейнер ещё не создан — идёт сборка или запуск.", nil
+		}
 		// Container doesn't exist on agent anymore - update DB status
 		_ = s.store.SetContainerStatus(ctx, id, "stopped")
 		return "Контейнер не найден на узле (возможно, был удален). Статус обновлен на 'stopped'.", nil

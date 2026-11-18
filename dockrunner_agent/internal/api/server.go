@@ -292,10 +292,44 @@ type SpecResponse struct {
 	User          string            `json:"user"`
 }
 
+// storedSpec собирает ответ из записи SQLite — используется, пока контейнер
+// ещё не создан (идёт сборка): центр получает 200 со статусом "building",
+// а не ошибку, из-за которой он помечал контейнер «stopped».
+func storedSpec(dep *store.Deployment) SpecResponse {
+	var ports []SpecPort
+	_ = json.Unmarshal([]byte(dep.Ports), &ports)
+	if ports == nil {
+		ports = []SpecPort{}
+	}
+	type storedVolume struct {
+		Name      string `json:"name"`
+		HostPath  string `json:"host_path"`
+		Container string `json:"container_path"`
+		Path      string `json:"path"`
+	}
+	var rawVols []storedVolume
+	_ = json.Unmarshal([]byte(dep.Volumes), &rawVols)
+	vols := make([]SpecVolume, 0, len(rawVols))
+	for _, v := range rawVols {
+		containerPath := v.Container
+		if containerPath == "" {
+			containerPath = v.Path
+		}
+		vols = append(vols, SpecVolume{Name: v.Name, HostPath: v.HostPath, ContainerPath: containerPath})
+	}
+	env := map[string]string{}
+	_ = json.Unmarshal([]byte(dep.Env), &env)
+	return SpecResponse{ID: dep.ID, Name: dep.Name, Image: dep.Image, Status: dep.Status, Ports: ports, Volumes: vols, Env: env, Entrypoint: []string{}, Cmd: []string{}}
+}
+
 func (s *Server) handleContainerSpec(w http.ResponseWriter, r *http.Request) {
 	dep, ok := s.findContainer(r)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "deployment not found"})
+		return
+	}
+	if dep.Container == "" {
+		writeJSON(w, http.StatusOK, storedSpec(dep))
 		return
 	}
 	live, err := s.dock.InspectSpec(r.Context(), dep.Container)
@@ -469,6 +503,11 @@ func (s *Server) handleContainerStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "deployment not found"})
 		return
 	}
+	// Сборка идёт, контейнера ещё нет — нулевая статистика вместо ошибки.
+	if dep.Container == "" {
+		writeJSON(w, http.StatusOK, StatsResponse{CPUPercent: 0, MemMB: 0})
+		return
+	}
 	stats, err := s.dock.Stats(r.Context(), dep.Container)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "stats unavailable"})
@@ -536,6 +575,18 @@ func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tail := queryTail(r)
+	// Контейнер ещё не создан (идёт сборка): отдаём лог сборки — именно он
+	// интересен пользователю в этот момент, а не ошибка Docker.
+	if dep.Container == "" {
+		for _, id := range s.buildLogSources(dep.ID) {
+			if text, found := s.builds.Tail(id, tail); found {
+				writeJSON(w, http.StatusOK, LogsResponse{Data: text})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, LogsResponse{Data: "контейнер ещё не создан — идёт сборка или запуск"})
+		return
+	}
 	// Docker logs are the source of truth. The in-memory streamer only retains
 	// a small rolling buffer and must not replace the requested historical tail.
 	text, err := s.dock.LogsTail(r.Context(), dep.Container, strconv.Itoa(tail))
