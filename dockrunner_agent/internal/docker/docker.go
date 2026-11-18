@@ -210,6 +210,18 @@ func (c *Client) Run(ctx context.Context, spec RunSpec) (string, error) {
 		&ocispec.Platform{},
 		spec.Name,
 	)
+	if err != nil && len(storageOpt) > 0 && strings.Contains(err.Error(), "storage-opt is supported only") {
+		// Демон на ext4 или xfs без pquota — квота размера недоступна.
+		// Запускаем без лимита диска, чтобы не ронять весь деплой.
+		hostConfig.StorageOpt = map[string]string{}
+		resp, err = c.cli.ContainerCreate(ctx,
+			&container.Config{Image: spec.Image, Env: env, ExposedPorts: exposed, Entrypoint: spec.Entrypoint, Cmd: spec.Cmd},
+			hostConfig,
+			netConfig,
+			&ocispec.Platform{},
+			spec.Name,
+		)
+	}
 	if err != nil {
 		return "", err
 	}

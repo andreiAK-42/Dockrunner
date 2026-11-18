@@ -655,6 +655,7 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		Network:       network,
 	})
 	if err != nil {
+		h.builds.Append(deploymentID, "ERROR: запуск не удался: "+err.Error())
 		h.logger.Warn("deploy run failed", "deployment", deploymentID, "error", err)
 		return h.failChild(ctx, task, parentApp, deploymentID, appName, "запуск не удался: "+err.Error(), err)
 	}
