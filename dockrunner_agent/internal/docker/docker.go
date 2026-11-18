@@ -448,16 +448,22 @@ func (c *Client) VolumeRemove(ctx context.Context, name string) error {
 // заканчивается на suffix. Используется для самовосстановления записей
 // о деплоях, потерянных из SQLite (например, после пересоздания контейнера
 // агента без volume): имя контейнера держит <app>-<shortID деплоя>.
+// Если пользователь задал своё имя контейнера без суффикса, дополнительно
+// ищем по тегу образа: агент тегирует собранные образы как app<suffix>:latest.
 func (c *Client) FindIDBySuffix(ctx context.Context, suffix string) (string, error) {
 	list, err := c.cli.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		return "", err
 	}
+	imagePrefix := "app" + suffix + ":"
 	for _, item := range list {
 		for _, name := range item.Names {
 			if strings.HasSuffix(strings.TrimPrefix(name, "/"), suffix) {
 				return item.ID, nil
 			}
+		}
+		if strings.HasPrefix(item.Image, imagePrefix) {
+			return item.ID, nil
 		}
 	}
 	return "", nil

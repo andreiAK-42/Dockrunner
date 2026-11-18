@@ -355,6 +355,28 @@ func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec 
 	return responseBody, nil
 }
 
+// syncStatusFromSpec сверяет статус из ответа агента с записью в БД и
+// обновляет её, если они разошлись (например, агент восстановил запись
+// о живом контейнере, а в БД остался "stopped").
+func (s *Service) syncStatusFromSpec(ctx context.Context, rec *admin.ContainerRecord, body []byte) {
+	var payload struct {
+		Data struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Data.Status == "" {
+		return
+	}
+	if payload.Data.Status == rec.Status {
+		return
+	}
+	if err := s.store.SetContainerStatus(ctx, rec.ID, payload.Data.Status); err != nil {
+		return
+	}
+	rec.Status = payload.Data.Status
+	s.publishContainer(rec.OwnerLogin, *rec)
+}
+
 func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, error) {
 	rec, err := s.store.GetContainer(ctx, id)
 	if err != nil {
@@ -367,6 +389,7 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 	// Try to get spec from agent with the given ID
 	body, err := s.agentGet(ctx, rec.NodeID, "/containers/"+id+"/spec")
 	if err == nil {
+		s.syncStatusFromSpec(ctx, rec, body)
 		return body, nil
 	}
 
@@ -379,6 +402,7 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 			if parentID != id {
 				parentBody, parentErr := s.agentGet(ctx, rec.NodeID, "/containers/"+parentID+"/spec")
 				if parentErr == nil {
+					s.syncStatusFromSpec(ctx, rec, parentBody)
 					return parentBody, nil
 				}
 			}
