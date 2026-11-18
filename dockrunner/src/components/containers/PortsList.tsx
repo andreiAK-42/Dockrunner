@@ -8,7 +8,8 @@ interface PortsListProps {
 }
 
 export default function PortsList({ spec, record }: PortsListProps) {
-  if (!spec || spec.ports.length === 0) {
+  const ports = spec?.ports ?? []
+  if (ports.length === 0) {
     return (
       <Card>
         <CardContent>
@@ -28,10 +29,10 @@ export default function PortsList({ spec, record }: PortsListProps) {
           Порты
         </Typography>
         <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
-          {spec.ports.map((p) => (
+          {ports.map((p) => (
             <Box key={`${p.host}-${p.container}`} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Chip size="small" label={`${p.host} → ${p.container}`} color="primary" variant="outlined" />
-              {p.host === spec.ports[0].host && (
+              {p.host === ports[0].host && (
                 <a href={`http://${record?.node_ip || record?.node_id}:${p.host}`} target="_blank" rel="noopener noreferrer">
                   <Tooltip title="Открыть в браузере">
                     <Button size="small" startIcon={<ExternalLink size={14} />} variant="outlined">

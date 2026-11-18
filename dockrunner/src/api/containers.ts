@@ -176,8 +176,8 @@ export interface ParsedDockerRunCommand {
   name: string
   image: string
   env: Record<string, string>
-  ports: { host: number; container: number }[]
-  volumes: { name: string; host_path: string; container_path: string }[]
+  ports: { host: number; container: number }[] | null
+  volumes: { name: string; host_path: string; container_path: string }[] | null
   restart_policy: string
   entrypoint: string[]
   cmd: string[]

@@ -6,7 +6,8 @@ interface VolumesListProps {
 }
 
 export default function VolumesList({ spec }: VolumesListProps) {
-  if (!spec || spec.volumes.length === 0) {
+  const volumes = spec?.volumes ?? []
+  if (volumes.length === 0) {
     return (
       <Card>
         <CardContent>
@@ -26,7 +27,7 @@ export default function VolumesList({ spec }: VolumesListProps) {
           Тома
         </Typography>
         <Stack spacing={1}>
-          {spec.volumes.map((v, i) => (
+          {volumes.map((v, i) => (
             <Box key={i} sx={{ display: 'flex', justifyContent: 'space-between', py: 0.7, borderBottom: '1px solid', borderColor: 'divider' }}>
               <Typography variant="body2" sx={{ fontWeight: 500 }}>
                 {v.name || v.host_path}
