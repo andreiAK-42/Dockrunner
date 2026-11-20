@@ -474,7 +474,7 @@ func (h *Handler) buildComposeService(ctx context.Context, task Task, svc git.Co
 		// пишем под её id, а не под id родительского деплоя.
 		buildTask := task
 		buildTask.DeploymentID = task.DeploymentID + "-" + svc.Name
-		if err := h.dock.Build(ctx, svc.ContextDir, svc.Dockerfile, tag, h.buildLines(buildTask)); err != nil {
+		if err := h.dock.Build(ctx, svc.ContextDir, svc.Dockerfile, tag, task.Env, h.buildLines(buildTask)); err != nil {
 			return "", err
 		}
 		return tag, nil
@@ -491,7 +491,7 @@ func (h *Handler) buildComposeService(ctx context.Context, task Task, svc git.Co
 func (h *Handler) buildDockerfile(ctx context.Context, task Task, contextDir, dockerfile, tag string) error {
 	h.logger.Info("deploy build started", "deployment", task.DeploymentID, "dockerfile", dockerfile)
 	start := time.Now()
-	if err := h.dock.Build(ctx, contextDir, dockerfile, tag, h.buildLines(task)); err != nil {
+	if err := h.dock.Build(ctx, contextDir, dockerfile, tag, task.Env, h.buildLines(task)); err != nil {
 		h.logger.Warn("deploy build failed", "deployment", task.DeploymentID, "error", err)
 		return err
 	}
