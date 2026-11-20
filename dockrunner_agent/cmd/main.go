@@ -31,58 +31,51 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("load config failed", "error", err)
+		slog.Error("Ошибка загрузки конфигурации", "error", err)
 		os.Exit(1)
 	}
+
+	//Логирование
 	logHandler := slog.Handler(slog.NewTextHandler(os.Stdout, nil))
 	var vlogHandler *victoria.LogHandler
-	if cfg.VictoriaLogsURL != "" {
-		hostname, _ := os.Hostname()
-		vlogHandler = victoria.NewLogHandler(cfg.VictoriaLogsURL, cfg.VictoriaToken,
-			"dockrunner-agent", "worker", hostname, slog.LevelInfo, 5*time.Second, slog.Default())
-		logHandler = victoria.NewMultiHandler(logHandler, vlogHandler)
-	}
+	
+	vlogHandler = victoria.NewLogHandler(cfg.VictoriaLogsURL, cfg.VictoriaToken,
+			"dockrunner-agent", "worker",  cfg.AgentName, slog.LevelInfo, 5*time.Second, slog.Default())
+	
+	logHandler = victoria.NewMultiHandler(logHandler, vlogHandler)
 	logger := slog.New(logHandler)
 
-	logger.Info("starting dockrunner agent",
-		"version", config.Version,
-		"agent", cfg.AgentName,
+	logger.Info("Запуск Dockrunner агента",
+		"Версия", config.Version,
+		"Агент", cfg.AgentName,
 		"rabbitmq", config.RedactURL(cfg.RabbitURL),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Use AgentIP from config if specified, otherwise auto-detect
-	if cfg.AgentIP != "" {
-		cfg.IP = cfg.AgentIP
-		logger.Info("using agent IP from config", "ip", cfg.IP)
-	} else if loc := geo.Detect(ctx, logger); loc.Lat != 0 || loc.Lng != 0 || loc.City != "" || loc.IP != "" {
-		cfg.City, cfg.Lat, cfg.Lng, cfg.IP = loc.City, loc.Lat, loc.Lng, loc.IP
-		logger.Info("geo detected", "city", loc.City, "lat", loc.Lat, "lng", loc.Lng, "ip", loc.IP)
-	}
-	if cfg.IP == "" {
-		cfg.IP = geo.LocalIP()
-	}
-
+	// Подключение к БД
 	db, err := store.Open(cfg.SQLitePath)
 	if err != nil {
-		logger.Error("open sqlite failed", "error", err)
+		logger.Error("Ошибка открытия SQLite", "error", err)
 		os.Exit(1)
 	}
 	defer func() { _ = db.Close() }()
 
+	//Подключение к Docker
 	dockCli, err := docker.New()
 	if err != nil {
-		logger.Error("docker unavailable", "error", err)
+		logger.Error("Docker не найден", "error", err)
 		os.Exit(1)
 	}
 	defer func() { _ = dockCli.Close() }()
+
 	if _, err := dockCli.RunningIDs(ctx); err != nil {
-		logger.Error("docker ping failed", "error", err)
+		logger.Error("Ошибка проверки соединения с Docker", "error", err)
 		os.Exit(1)
 	}
 
+	//Подключение к RabbitMQ
 	queueClient := connectQueue(ctx, cfg, logger)
 	if queueClient != nil {
 		defer func() { _ = queueClient.Close() }()
@@ -101,13 +94,18 @@ func main() {
 		}
 	}
 
-	hostname, _ := os.Hostname()
+	//Подключение к Victoria Metrics
 	var metricsWriter *victoria.MetricsWriter
-	if cfg.VictoriaMetricsURL != "" {
-		metricsWriter = victoria.NewMetricsWriter(cfg.VictoriaMetricsURL, cfg.VictoriaToken, 5*time.Second, logger)
-	}
-	go heartbeat.Start(ctx, logger, cfg, hostname, db, dockCli, metricsWriter)
+	metricsWriter = victoria.NewMetricsWriter(cfg.VictoriaMetricsURL, cfg.VictoriaToken, 5*time.Second, logger)
 
+
+	//Получение данных о сервере
+	serverGeo := geo.Detect(ctx, logger)
+
+	//Запуск горутины Heartbeat
+	go heartbeat.Start(ctx, logger, cfg, db, dockCli, metricsWriter, &serverGeo)
+
+	//Настройка http сервера
 	apiSrv := api.New(cfg, db, dockCli, streamer, builds, logger.Info)
 	httpSrv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -115,28 +113,31 @@ func main() {
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
+
+	//Запуск http сервера
 	go func() {
-		logger.Info("agent api listening", "addr", httpSrv.Addr)
+		logger.Info("API агента запущено", "Адрес", httpSrv.Addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("api server failed", "error", err)
 		}
 	}()
 
+	//Ожидание сигнала на выключение
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
-	logger.Info("shutdown signal received", "signal", sig.String())
+	logger.Info("Получен сигнал на выключение", "signal", sig.String())
 
+	//Выключение агента
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("api shutdown failed", "error", err)
+		logger.Error("Ошибка выключения API", "error", err)
 	}
 	streamer.Stop()
-	if vlogHandler != nil {
-		vlogHandler.Close()
-	}
-	logger.Info("agent exited")
+	vlogHandler.Close()
+	
+	logger.Info("Выключение агента")
 }
 
 // connectQueue подключает RabbitMQ. Без очереди возвращает nil —

@@ -358,6 +358,11 @@ func (s *Service) syncStatusFromSpec(ctx context.Context, rec *admin.ContainerRe
 	if status == "" || status == rec.Status {
 		return
 	}
+	// Пока идёт сборка/перезапуск, статус ведёт агент: spec в это время
+	// может описывать ещё старый (работающий) контейнер.
+	if rec.Status == "building" {
+		return
+	}
 	if err := s.store.SetContainerStatus(ctx, rec.ID, status); err != nil {
 		return
 	}
@@ -451,9 +456,9 @@ func (s *Service) ContainerSpec(ctx context.Context, owner, id string) ([]byte, 
 		return body, nil
 	}
 	err = firstErr
-
-	// If all attempts failed, check if it's a 404 (container not found on agent)
-	// In that case, update the DB status to "stopped" and return a spec from the DB record
+	if err == nil {
+		err = errors.New("agent returned no container spec")
+	}
 	if agentNotFound(err) {
 		// Пока идёт сборка, отсутствие контейнера на узле — норма, а не
 		// признак остановки: статус не трогаем.
@@ -532,6 +537,9 @@ func (s *Service) ContainerStats(ctx context.Context, owner, id string) (*Contai
 		return &stats, nil
 	}
 	err = firstErr
+	if err == nil {
+		err = errors.New("agent returned no container stats")
+	}
 
 	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return zeros (container is stopped)
@@ -605,6 +613,9 @@ func (s *Service) ContainerLogs(ctx context.Context, owner, id string, tail int)
 		return payload.Data, nil
 	}
 	err = firstErr
+	if err == nil {
+		err = errors.New("agent returned no container logs")
+	}
 
 	// If all attempts failed, check if it's a 404 (container not found on agent)
 	// In that case, update the DB status to "stopped" and return empty logs (container is stopped)

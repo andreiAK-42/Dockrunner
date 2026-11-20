@@ -25,6 +25,7 @@ import (
 	"dockrunner_agent/internal/config"
 	"dockrunner_agent/internal/docker"
 	"dockrunner_agent/internal/fsx"
+	"dockrunner_agent/internal/geo"
 	"dockrunner_agent/internal/store"
 	"dockrunner_agent/internal/victoria"
 )
@@ -36,26 +37,29 @@ type UserStorage struct {
 }
 
 type Report struct {
-	AgentID       string        `json:"agent_id"`
-	Hostname      string        `json:"hostname"`
-	IP            string        `json:"ip"`
-	Description   string        `json:"description"`
-	City          string        `json:"city"`
-	Lat           float64       `json:"lat"`
-	Lng           float64       `json:"lng"`
-	ApiURL        string        `json:"api_url"`
-	CPUPercent    float64       `json:"cpu_percent"`
-	CPUTotal      int           `json:"cpu_total"`
-	CPUMhz        int           `json:"cpu_mhz"`
-	MemUsedGB     float64       `json:"mem_used_gb"`
-	MemTotalGB    float64       `json:"mem_total_gb"`
-	MemSpeedMhz   int           `json:"mem_speed_mhz"`
-	DiskUsedGB    float64       `json:"disk_used_gb"`
-	DiskTotalGB   float64       `json:"disk_total_gb"`
-	Containers    int           `json:"containers"`
-	Storage       []UserStorage `json:"storage"`
-	NetDownMbps   float64       `json:"net_down_mbps"`
-	NetUpMbps     float64       `json:"net_up_mbps"`
+	// AgentID оставлен для совместимости со старыми централями: агент
+	// идентифицируется именем (AGENT_NAME), оно же уходит в agent_name.
+	AgentID     string        `json:"agent_id"`
+	AgentName   string        `json:"agent_name"`
+	Hostname    string        `json:"hostname"`
+	IP          string        `json:"ip"`
+	Description string        `json:"description"`
+	City        string        `json:"city"`
+	Lat         float64       `json:"lat"`
+	Lng         float64       `json:"lng"`
+	ApiURL      string        `json:"api_url"`
+	CPUPercent  float64       `json:"cpu_percent"`
+	CPUTotal    int           `json:"cpu_total"`
+	CPUMhz      int           `json:"cpu_mhz"`
+	MemUsedGB   float64       `json:"mem_used_gb"`
+	MemTotalGB  float64       `json:"mem_total_gb"`
+	MemSpeedMhz int           `json:"mem_speed_mhz"`
+	DiskUsedGB  float64       `json:"disk_used_gb"`
+	DiskTotalGB float64       `json:"disk_total_gb"`
+	Containers  int           `json:"containers"`
+	Storage     []UserStorage `json:"storage"`
+	NetDownMbps float64       `json:"net_down_mbps"`
+	NetUpMbps   float64       `json:"net_up_mbps"`
 }
 
 func toGB(bytes float64) float64 {
@@ -108,15 +112,15 @@ func collectStorage(ctx context.Context, db *sql.DB, dock *docker.Client, worksp
 	return out
 }
 
-func Collect(ctx context.Context, db *sql.DB, dock *docker.Client, cfg *config.Config, hostname string) (Report, error) {
+func Collect(ctx context.Context, db *sql.DB, dock *docker.Client, cfg *config.Config, geo *geo.Location) (Report, error) {
 	report := Report{
 		AgentID:     cfg.AgentName,
-		Hostname:    hostname,
-		IP:          cfg.IP,
+		AgentName:   cfg.AgentName,
+		IP:          cfg.AgentIP,
 		Description: cfg.AgentDescription,
-		City:        cfg.City,
-		Lat:         cfg.Lat,
-		Lng:         cfg.Lng,
+		City:        geo.City,
+		Lat:         geo.Lat,
+		Lng:         geo.Lng,
 		ApiURL:      cfg.AgentPublicURL,
 	}
 
@@ -349,16 +353,16 @@ func (e *statusError) Error() string {
 	return "heartbeat rejected: " + http.StatusText(e.code)
 }
 
-func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, hostname string, db *sql.DB, dock *docker.Client, metrics *victoria.MetricsWriter) {
+func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, db *sql.DB, dock *docker.Client, metrics *victoria.MetricsWriter, geo *geo.Location) {
 	// Send the first heartbeat immediately so the central server receives the
 	// IP/location detected during agent startup without waiting one full interval.
 	send := func() {
-		report, err := Collect(ctx, db, dock, cfg, hostname)
+		report, err := Collect(ctx, db, dock, cfg, geo)
 		if err != nil {
 			logger.Warn("heartbeat metrics collection failed", "error", err)
 		}
 		if metrics != nil {
-			line := victoria.NodeMetricsLine(report.AgentID, hostname,
+			line := victoria.NodeMetricsLine(report.AgentID, cfg.AgentName,
 				report.CPUPercent, report.MemUsedGB, report.MemTotalGB,
 				report.DiskUsedGB, report.DiskTotalGB, report.Containers,
 				report.NetDownMbps, report.NetUpMbps)
@@ -372,7 +376,13 @@ func Start(ctx context.Context, logger *slog.Logger, cfg *config.Config, hostnam
 	}
 
 	send()
-	ticker := time.NewTicker(cfg.Heartbeat)
+	// HEARTBEAT_INTERVAL может быть пустым или заданным числом секунд без
+	// суффикса ("15") — такой интервал не парсится, и NewTicker(0) паникует.
+	interval := cfg.Heartbeat
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

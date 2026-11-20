@@ -1,8 +1,8 @@
 package agents
 
 import (
-	"github.com/gin-gonic/gin"
 	"dockrunner_backend/internal/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 func RegisterRoutes(rg *gin.RouterGroup, h *Handler, jwtSecret, agentToken string) {

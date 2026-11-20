@@ -405,7 +405,13 @@ func (c *Client) Recreate(ctx context.Context, id string, spec RecreateSpec) (st
 	}
 	// Keep old container as rollback until new config is validated by Docker create.
 	oldName := strings.TrimPrefix(info.Name, "/")
-	if err := c.cli.ContainerRename(ctx, id, oldName+"-dockrunner-backup"); err != nil {
+	backupName := oldName + "-dockrunner-backup"
+	// Остаток прошлой неудачной замены занял бы имя резерва.
+	_ = c.cli.ContainerRemove(ctx, backupName, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	if err := c.cli.ContainerRename(ctx, id, backupName); err != nil {
+		if info.State != nil && info.State.Running {
+			_ = c.cli.ContainerStart(ctx, id, container.StartOptions{})
+		}
 		return "", fmt.Errorf("rename old container: %w", err)
 	}
 	cfg := *info.Config
@@ -508,6 +514,34 @@ func (c *Client) Restart(ctx context.Context, id string) error {
 
 func (c *Client) Remove(ctx context.Context, id string) error {
 	return c.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
+}
+
+// Rename переименовывает контейнер (например, чтобы сохранить старую версию
+// как резерв до успешного запуска новой).
+func (c *Client) Rename(ctx context.Context, id, name string) error {
+	return c.cli.ContainerRename(ctx, id, name)
+}
+
+// Start запускает ранее остановленный контейнер.
+func (c *Client) Start(ctx context.Context, id string) error {
+	return c.cli.ContainerStart(ctx, id, container.StartOptions{})
+}
+
+// FindIDByName ищет контейнер по точному имени, включая остановленные.
+// Пустая строка означает, что контейнера с таким именем нет.
+func (c *Client) FindIDByName(ctx context.Context, name string) (string, error) {
+	name = strings.TrimSpace(strings.TrimPrefix(name, "/"))
+	if name == "" {
+		return "", nil
+	}
+	info, err := c.cli.ContainerInspect(ctx, name)
+	if err != nil {
+		if IsMissing(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return info.ID, nil
 }
 
 func (c *Client) VolumeRemove(ctx context.Context, name string) error {

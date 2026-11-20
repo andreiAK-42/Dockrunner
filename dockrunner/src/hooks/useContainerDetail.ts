@@ -108,6 +108,7 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
     setSyncing(true)
     setSyncError(null)
     setSyncSuccess(null)
+    let appName = ''
 
     try {
       // Fetch fresh record from backend to avoid stale closure
@@ -119,6 +120,7 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
         setSyncing(false)
         return
       }
+      appName = currentRecord.app_name
 
       const specRes = await fetchContainerSpec(currentRecord.id)
       const actualStatus = specRes.data.status
@@ -138,8 +140,14 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
       // Try to trigger a refresh from the agent
       if (err instanceof ApiError && err.status === 404) {
         try {
-          await refreshContainerByApp(id || '')
-          setSyncSuccess('Запрошено обновление с агента, статус обновится через несколько секунд')
+          // Именно имя приложения: обновление запускается по app_name, а не
+          // по id деплоя (иначе бэкенд отвечает 404).
+          if (appName) {
+            await refreshContainerByApp(appName)
+            setSyncSuccess('Запрошено обновление с агента, статус обновится через несколько секунд')
+          } else {
+            setSyncError('Контейнер не найден на узле')
+          }
         } catch {
           setSyncError('Не удалось запросить обновление контейнера')
         }
@@ -149,7 +157,7 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
     } finally {
       setSyncing(false)
     }
-  }, [id, findContainer, dispatch])
+  }, [findContainer, dispatch])
 
   const busy = updating || deleting || applyingCommand || acting !== ''
 

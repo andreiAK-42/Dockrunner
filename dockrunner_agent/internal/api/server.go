@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -387,24 +388,18 @@ func (s *Server) allowedNetworks(ctx context.Context) (map[string]bool, error) {
 	return allowed, nil
 }
 
-// validateWorkingDir checks if the working directory is within allowed paths.
+// validateWorkingDir проверяет рабочий каталог контейнера. Путь применяется
+// только внутри контейнера, поэтому достаточно потребовать абсолютный путь:
+// белый список ломал валидные значения из образов (например, "/" у nginx).
 func validateWorkingDir(dir string) error {
 	if dir == "" {
-		return nil // empty means use image default
+		return nil
 	}
-	allowedPrefixes := []string{
-		"/workspace",
-		"/app",
-		"/home",
-		"/data",
-		"/var/lib",
+	clean := path.Clean(dir)
+	if !path.IsAbs(clean) {
+		return fmt.Errorf("working_dir must be an absolute path inside the container")
 	}
-	for _, prefix := range allowedPrefixes {
-		if strings.HasPrefix(dir, prefix) {
-			return nil
-		}
-	}
-	return fmt.Errorf("working_dir must be under one of: %s", strings.Join(allowedPrefixes, ", "))
+	return nil
 }
 
 func (s *Server) handleContainerRecreate(w http.ResponseWriter, r *http.Request) {

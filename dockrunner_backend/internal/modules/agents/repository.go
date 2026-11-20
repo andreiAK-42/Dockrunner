@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -14,28 +15,28 @@ import (
 var ErrNoAPIURL = errors.New("agent has no api url")
 
 type Agent struct {
-	ID           string    `json:"id" db:"id"`
-	Name         string    `json:"name" db:"name"`
-	IP           string    `json:"ip" db:"ip"`
-	City         string    `json:"city" db:"city"`
-	Lat          float64   `json:"lat" db:"lat"`
-	Lng          float64   `json:"lng" db:"lng"`
-	ApiURL       string    `json:"api_url" db:"api_url"`
-	CPUTotal     int       `json:"cpu_total" db:"cpu_total"`
-	CPUPercent   float64   `json:"cpu_percent" db:"cpu_percent"`
-	CPUMhz       int       `json:"cpu_mhz" db:"cpu_mhz"`
-	MemUsedGB    float64   `json:"mem_used_gb" db:"mem_used_gb"`
-	MemTotalGB   float64   `json:"mem_total_gb" db:"mem_total_gb"`
-	MemType      string    `json:"mem_type" db:"mem_type"`
-	MemSpeedMhz  int       `json:"mem_speed_mhz" db:"mem_speed_mhz"`
-	DiskUsedGB   float64   `json:"disk_used_gb" db:"disk_used_gb"`
-	DiskTotalGB  float64   `json:"disk_total_gb" db:"disk_total_gb"`
-	DiskType     string    `json:"disk_type" db:"disk_type"`
-	Containers   int       `json:"containers" db:"containers"`
-	Description  string    `json:"description" db:"description"`
-	NetDownMbps  float64   `json:"net_down_mbps" db:"net_down_mbps"`
-	NetUpMbps    float64   `json:"net_up_mbps" db:"net_up_mbps"`
-	LastSeen     time.Time `json:"last_seen" db:"last_seen"`
+	ID          string    `json:"id" db:"id"`
+	Name        string    `json:"name" db:"name"`
+	IP          string    `json:"ip" db:"ip"`
+	City        string    `json:"city" db:"city"`
+	Lat         float64   `json:"lat" db:"lat"`
+	Lng         float64   `json:"lng" db:"lng"`
+	ApiURL      string    `json:"api_url" db:"api_url"`
+	CPUTotal    int       `json:"cpu_total" db:"cpu_total"`
+	CPUPercent  float64   `json:"cpu_percent" db:"cpu_percent"`
+	CPUMhz      int       `json:"cpu_mhz" db:"cpu_mhz"`
+	MemUsedGB   float64   `json:"mem_used_gb" db:"mem_used_gb"`
+	MemTotalGB  float64   `json:"mem_total_gb" db:"mem_total_gb"`
+	MemType     string    `json:"mem_type" db:"mem_type"`
+	MemSpeedMhz int       `json:"mem_speed_mhz" db:"mem_speed_mhz"`
+	DiskUsedGB  float64   `json:"disk_used_gb" db:"disk_used_gb"`
+	DiskTotalGB float64   `json:"disk_total_gb" db:"disk_total_gb"`
+	DiskType    string    `json:"disk_type" db:"disk_type"`
+	Containers  int       `json:"containers" db:"containers"`
+	Description string    `json:"description" db:"description"`
+	NetDownMbps float64   `json:"net_down_mbps" db:"net_down_mbps"`
+	NetUpMbps   float64   `json:"net_up_mbps" db:"net_up_mbps"`
+	LastSeen    time.Time `json:"last_seen" db:"last_seen"`
 }
 
 type Repository struct {
@@ -65,6 +66,70 @@ func (r *Repository) UpsertHeartbeat(ctx context.Context, a Agent) error {
 		a.DiskUsedGB, a.DiskTotalGB, a.DiskType,
 		a.Containers, a.Description, a.NetDownMbps, a.NetUpMbps, a.LastSeen)
 	return err
+}
+
+// EnsureAgentIdentity переносит узел на новый id, если агент сменил
+// идентификатор: например, раньше присылал AGENT_ID=worker-01 и
+// AGENT_NAME=Сатурн, а теперь только AGENT_NAME=Сатурн. Без переноса в
+// containers/volumes/storage_usage остался бы старый node_id, и центр считал
+// бы узел офлайн, а приложения — привязанными к несуществующему воркеру.
+//
+// Узел ищем по имени (если heartbeat был недавно) или по api_url
+// (AGENT_PUBLIC_URL) — адрес API однозначно указывает на тот же воркер,
+// поэтому по нему переносим даже после долгого простоя.
+// Переносим только когда строки с новым id ещё нет.
+func (r *Repository) EnsureAgentIdentity(ctx context.Context, id, name, apiURL string) error {
+	if id == "" || name == "" {
+		return nil
+	}
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var oldID string
+	err = tx.QueryRow(ctx, `SELECT id FROM agents
+		WHERE id <> $2
+		  AND (
+		    (name = $1 AND last_seen > now() - interval '15 minutes')
+		    OR ($3 <> '' AND api_url = $3)
+		  )
+		ORDER BY (name = $1) DESC, last_seen DESC
+		LIMIT 1 FOR UPDATE`, name, id, apiURL).Scan(&oldID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+
+	// Ссылки на узел в остальных таблицах (внешних ключей нет).
+	for _, q := range []string{
+		`UPDATE containers SET node_id = $2 WHERE node_id = $1`,
+		`UPDATE volumes SET node_id = $2 WHERE node_id = $1`,
+		`UPDATE storage_usage SET agent_id = $2 WHERE agent_id = $1`,
+		`UPDATE launch_requests SET node_id = $2 WHERE node_id = $1`,
+		`UPDATE agent_pricing SET agent_id = $2 WHERE agent_id = $1`,
+		`UPDATE agents SET id = $2 WHERE id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, oldID, id); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	r.logger.Info("agent identity migrated", zap.String("from", oldID), zap.String("to", id), zap.String("name", name))
+	return nil
 }
 
 func (r *Repository) List(ctx context.Context) ([]Agent, error) {

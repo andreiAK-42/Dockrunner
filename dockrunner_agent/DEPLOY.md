@@ -35,8 +35,7 @@ cp .env.example .env
 Обязательное:
 
 ```env
-AGENT_ID=worker-01            # уникальный id сервера
-AGENT_NAME=fobos
+AGENT_NAME=fobos              # уникальное имя = id узла в панели
 AGENT_CITY=Frankfurt
 CENTRAL_URL=https://panel.example.com
 AGENT_TOKEN=тот-же-что-у-бэкенда   # 1 в 1 как AGENT_TOKEN централи

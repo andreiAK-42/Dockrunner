@@ -3,8 +3,8 @@ package geo
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"time"
 
@@ -19,60 +19,130 @@ type Location struct {
 }
 
 func Detect(ctx context.Context, logger *slog.Logger) Location {
-	start := time.Now()
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://ipapi.co/json/", nil)
-	if err != nil {
-		logger.Warn("geo detect failed: request creation error", "error", err, "duration_ms", time.Since(start).Milliseconds())
-		return Location{IP: LocalIP()}
-	}
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		logger.Warn("geo detect failed: HTTP error", "error", err, "duration_ms", time.Since(start).Milliseconds())
-		return Location{IP: LocalIP()}
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
-		logger.Warn("geo detect failed: non-2xx status", "status", res.StatusCode, "duration_ms", time.Since(start).Milliseconds())
-		return Location{IP: LocalIP()}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
 	}
 
-	var payload struct {
+	// Основной источник: ipapi.co
+	var ipapi struct {
 		IP   string  `json:"ip"`
 		City string  `json:"city"`
 		Lat  float64 `json:"latitude"`
 		Lon  float64 `json:"longitude"`
 	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&payload); err != nil {
-		logger.Warn("geo decode failed", "error", err, "duration_ms", time.Since(start).Milliseconds())
-		return Location{IP: LocalIP()}
-	}
-	if payload.IP == "" {
-		logger.Warn("geo response did not contain a public IP", "duration_ms", time.Since(start).Milliseconds())
-		return Location{IP: LocalIP()}
+
+	err := requestJSON(ctx, client, "https://ipapi.co/json/", &ipapi)
+	if err == nil && ipapi.IP != "" {
+		logger.Info("Геолокация получена через ipapi.co",
+			"ip", ipapi.IP,
+			"city", ipapi.City,
+		)
+
+		return Location{
+			IP:   ipapi.IP,
+			City: ipapi.City,
+			Lat:  ipapi.Lat,
+			Lng:  ipapi.Lon,
+		}
 	}
 
-	logger.Info("geo detect succeeded",
-		"ip", payload.IP,
-		"city", payload.City,
-		"lat", payload.Lat,
-		"lng", payload.Lon,
-		"duration_ms", time.Since(start).Milliseconds(),
+	logger.Warn("ipapi.co недоступен", "error", err)
+
+	// Первый резерв: ipwho.is
+	var ipwho struct {
+		Success bool    `json:"success"`
+		IP      string  `json:"ip"`
+		City    string  `json:"city"`
+		Lat     float64 `json:"latitude"`
+		Lon     float64 `json:"longitude"`
+	}
+
+	err = requestJSON(ctx, client, "https://ipwho.is/", &ipwho)
+	if err == nil && ipwho.Success && ipwho.IP != "" {
+		logger.Info("Геолокация получена через ipwho.is",
+			"ip", ipwho.IP,
+			"city", ipwho.City,
+		)
+
+		return Location{
+			IP:   ipwho.IP,
+			City: ipwho.City,
+			Lat:  ipwho.Lat,
+			Lng:  ipwho.Lon,
+		}
+	}
+
+	logger.Warn("ipwho.is недоступен", "error", err)
+
+	// Второй резерв: freeipapi.com
+	var freeipapi struct {
+		IP   string  `json:"ipAddress"`
+		City string  `json:"cityName"`
+		Lat  float64 `json:"latitude"`
+		Lon  float64 `json:"longitude"`
+	}
+
+	err = requestJSON(
+		ctx,
+		client,
+		"https://free.freeipapi.com/api/v1/json",
+		&freeipapi,
 	)
-	return Location{City: payload.City, IP: payload.IP, Lat: payload.Lat, Lng: payload.Lon}
+
+	if err == nil && freeipapi.IP != "" {
+		logger.Info("Геолокация получена через freeipapi.com",
+			"ip", freeipapi.IP,
+			"city", freeipapi.City,
+		)
+
+		return Location{
+			IP:   freeipapi.IP,
+			City: freeipapi.City,
+			Lat:  freeipapi.Lat,
+			Lng:  freeipapi.Lon,
+		}
+	}
+
+	logger.Warn("freeipapi.com недоступен", "error", err)
+
+	// Все источники недоступны.
+	logger.Warn("Не удалось определить геолокацию, используем локальный IP")
+
+	return Location{}
 }
 
-// LocalIP — исходящий адрес машины (LAN). Нужен, если geo-сервис недоступен.
-func LocalIP() string {
-	conn, err := net.DialTimeout("udp", "8.8.8.8:80", 2*time.Second)
+// requestJSON выполняет HTTP-запрос и декодирует JSON-ответ.
+func requestJSON(
+	ctx context.Context,
+	client *http.Client,
+	endpoint string,
+	result any,
+) error {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		endpoint,
+		nil,
+	)
 	if err != nil {
-		return ""
+		return err
 	}
-	defer func() { _ = conn.Close() }()
-	addr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || addr == nil {
-		return ""
+
+	res, err := client.Do(req)
+	if err != nil {
+		return err
 	}
-	return addr.IP.String()
+	defer res.Body.Close()
+
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("unexpected HTTP status: %d", res.StatusCode)
+	}
+
+	if err := json.NewDecoder(
+		io.LimitReader(res.Body, 1<<20),
+	).Decode(result); err != nil {
+		return fmt.Errorf("JSON decode failed: %w", err)
+	}
+
+	return nil
 }

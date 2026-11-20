@@ -7,15 +7,14 @@
 # Требования: Docker на хосте (сокет проброшен в контейнер), доступность
 # центральной RabbitMQ и центрального бэкенда из этой машины.
 # Состояние (SQLite, workspace с клонами репозиториев) — в volume agent-data.
-# AGENT_ID должен быть уникальным на каждом воркере.
+# AGENT_NAME должен быть уникальным на каждом воркере.
 
 services:
   agent:
     build: ./dockrunner_agent
     container_name: dockrunner-agent
     restart: unless-stopped
-    # Все настройки агента — из env.agent (переменные окружения
-    # перекрывают значения config.yaml в образе).
+    # Все настройки агента — из env.agent (config.yaml больше не читается).
     env_file:
       - env.agent
     volumes:

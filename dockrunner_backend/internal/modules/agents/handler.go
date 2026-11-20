@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -34,11 +35,15 @@ func (h *Handler) Heartbeat(c *gin.Context) {
 		response.BadRequest(c, err.Error())
 		return
 	}
-	if req.AgentID == "" {
-		response.BadRequest(c, "agent_id is required")
+	if resolveAgentID(req) == "" {
+		response.BadRequest(c, "agent_id or agent_name is required")
 		return
 	}
 	if err := h.service.Heartbeat(c.Request.Context(), req); err != nil {
+		if errors.Is(err, ErrNoAgentID) {
+			response.BadRequest(c, "agent_id or agent_name is required")
+			return
+		}
 		h.logger.Error("agent heartbeat failed", zap.Error(err))
 		response.Internal(c, "failed to store heartbeat")
 		return

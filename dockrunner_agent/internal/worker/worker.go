@@ -633,8 +633,8 @@ func (h *Handler) deploy(ctx context.Context, task Task) error {
 // сборки/запуска, чтобы API агента уже знал о нём и отвечал сохранённой
 // спецификацией вместо 404. Без этого централь помечал контейнер «stopped»
 // в первые же секунды сборки. Существующая запись перечитывается, чтобы не
-// потерять поля, которых нет в задаче; Container сбрасывается — старый
-// контейнер будет удалён при запуске нового.
+// потерять поля, которых нет в задаче. Ссылка на старый контейнер
+// сохраняется до успешного запуска новой версии.
 func (h *Handler) markBuilding(task Task, ports []PortTask, deploymentID, appName, name, image, parentID, parentApp, service string) {
 	portsJSON, _ := json.Marshal(ports)
 	volumesJSON, _ := json.Marshal(task.Volumes)
@@ -649,7 +649,10 @@ func (h *Handler) markBuilding(task Task, ports []PortTask, deploymentID, appNam
 	dep.RepoURL = task.RepoURL
 	dep.Name = name
 	dep.Image = image
-	dep.Container = ""
+	// Container намеренно не сбрасываем: до успешного запуска новой версии
+	// продолжает работать старый контейнер, и запись должна на него
+	// ссылаться. Иначе во время сборки (и после её провала) приложение
+	// «пропадает» из панели, хотя контейнер жив.
 	dep.Status = "building"
 	dep.Ports = string(portsJSON)
 	dep.Volumes = string(volumesJSON)
@@ -685,8 +688,25 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 	portsJSON, _ := json.Marshal(ports)
 	volumesJSON, _ := json.Marshal(task.Volumes)
 	envJSON, _ := json.Marshal(task.Env)
-	if err := h.dock.Remove(ctx, name); err != nil && !docker.IsMissing(err) {
-		return h.failChild(ctx, task, parentApp, deploymentID, appName, "старый контейнер не удалён: "+err.Error(), err)
+	// Старый контейнер не удаляем сразу: останавливаем и переименовываем в
+	// резерв, чтобы неудачный запуск новой версии не оставил приложение без
+	// работающего контейнера (порты/тома уже заняты его конфигурацией).
+	backupName := name + "-dockrunner-backup"
+	oldID, findErr := h.dock.FindIDByName(ctx, name)
+	if findErr != nil {
+		return h.failChild(ctx, task, parentApp, deploymentID, appName, "старый контейнер не найден: "+findErr.Error(), findErr)
+	}
+	if oldID != "" {
+		// Остаток прошлой неудачной попытки замены.
+		_ = h.dock.Remove(ctx, backupName)
+		if err := h.dock.Stop(ctx, oldID); err != nil && !docker.IsMissing(err) {
+			return h.failChild(ctx, task, parentApp, deploymentID, appName, "старый контейнер не остановлен: "+err.Error(), err)
+		}
+		if err := h.dock.Rename(ctx, oldID, backupName); err != nil {
+			// Не смогли освободить имя — новый контейнер не создать.
+			_ = h.dock.Start(ctx, oldID)
+			return h.failChild(ctx, task, parentApp, deploymentID, appName, "старый контейнер не переименован: "+err.Error(), err)
+		}
 	}
 	containerID, err := h.dock.Run(ctx, docker.RunSpec{
 		Name:          name,
@@ -704,9 +724,21 @@ func (h *Handler) deploySingle(ctx context.Context, task Task, image, appName, d
 		Owner:         task.Owner,
 	})
 	if err != nil {
+		// Run мог создать контейнер и упасть на старте — освобождаем имя
+		// и возвращаем старую версию, чтобы приложение продолжало работать.
+		if oldID != "" {
+			_ = h.dock.Remove(ctx, name)
+			if renameErr := h.dock.Rename(ctx, backupName, name); renameErr == nil {
+				_ = h.dock.Start(ctx, oldID)
+			}
+		}
 		h.builds.Append(deploymentID, "ERROR: запуск не удался: "+err.Error())
 		h.logger.Warn("deploy run failed", "deployment", deploymentID, "error", err)
 		return h.failChild(ctx, task, parentApp, deploymentID, appName, "запуск не удался: "+err.Error(), err)
+	}
+	// Новая версия запустилась — резерв больше не нужен.
+	if oldID != "" {
+		_ = h.dock.Remove(ctx, backupName)
 	}
 	h.logger.Info("deploy completed", "deployment", deploymentID, "container", containerID)
 
