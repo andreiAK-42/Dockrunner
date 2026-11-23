@@ -35,15 +35,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	//Логирование
-	logHandler := slog.Handler(slog.NewTextHandler(os.Stdout, nil))
-	var vlogHandler *victoria.LogHandler
-	
-	vlogHandler = victoria.NewLogHandler(cfg.VictoriaLogsURL, cfg.VictoriaToken,
-			"dockrunner-agent", "worker",  cfg.AgentName, slog.LevelInfo, 5*time.Second, slog.Default())
-	
-	logHandler = victoria.NewMultiHandler(logHandler, vlogHandler)
-	logger := slog.New(logHandler)
+	// Логирование: stdout + VictoriaLogs.
+	vlogHandler := victoria.NewLogHandler(cfg.VictoriaLogsURL, cfg.VictoriaToken,
+		"dockrunner-agent", "worker", cfg.AgentName, slog.LevelInfo, 5*time.Second, slog.Default())
+	logger := slog.New(victoria.NewMultiHandler(slog.NewTextHandler(os.Stdout, nil), vlogHandler))
 
 	logger.Info("Запуск Dockrunner агента",
 		"Версия", config.Version,
@@ -94,18 +89,16 @@ func main() {
 		}
 	}
 
-	//Подключение к Victoria Metrics
-	var metricsWriter *victoria.MetricsWriter
-	metricsWriter = victoria.NewMetricsWriter(cfg.VictoriaMetricsURL, cfg.VictoriaToken, 5*time.Second, logger)
+	// Подключение к Victoria Metrics
+	metricsWriter := victoria.NewMetricsWriter(cfg.VictoriaMetricsURL, cfg.VictoriaToken, 5*time.Second, logger)
 
-
-	//Получение данных о сервере
+	// Получение данных о сервере
 	serverGeo := geo.Detect(ctx, logger)
 
-	//Запуск горутины Heartbeat
+	// Запуск горутины Heartbeat
 	go heartbeat.Start(ctx, logger, cfg, db, dockCli, metricsWriter, &serverGeo)
 
-	//Настройка http сервера
+	// Настройка http сервера
 	apiSrv := api.New(cfg, db, dockCli, streamer, builds, logger.Info)
 	httpSrv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -114,7 +107,7 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 	}
 
-	//Запуск http сервера
+	// Запуск http сервера
 	go func() {
 		logger.Info("API агента запущено", "Адрес", httpSrv.Addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -122,13 +115,13 @@ func main() {
 		}
 	}()
 
-	//Ожидание сигнала на выключение
+	// Ожидание сигнала на выключение
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	logger.Info("Получен сигнал на выключение", "signal", sig.String())
 
-	//Выключение агента
+	// Выключение агента
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
@@ -136,7 +129,7 @@ func main() {
 	}
 	streamer.Stop()
 	vlogHandler.Close()
-	
+
 	logger.Info("Выключение агента")
 }
 

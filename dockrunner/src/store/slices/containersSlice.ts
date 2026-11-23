@@ -39,16 +39,21 @@ const initialState: ContainersState = {
   adminError: '',
 }
 
+// fetchMineContainers дедуплицирует параллельные запросы: пока список уже
+// загружается, повторный dispatch ждёт тот же promise, а не отменяется через
+// condition. Отмена condition'ом отклоняла thunk объектом ConditionError,
+// и вызывающий код (например, проверка статуса) показывал ложную ошибку.
+let mineInFlight: Promise<MineContainer[]> | null = null
+
 export const fetchMineContainers = createAsyncThunk<MineContainer[]>('containers/fetchMine', async () => {
-  const res = await fetchMine()
-  return res.data
-}, {
-  // Не дублировать запрос при двойном монтировании (StrictMode) или
-  // параллельных диспатчах — RTK пропустит, если уже идёт загрузка.
-  condition: (_, { getState }) => {
-    const state = getState() as { containers: ContainersState }
-    return state.containers.mineStatus !== 'loading'
-  },
+  if (!mineInFlight) {
+    mineInFlight = fetchMine()
+      .then((res) => res.data)
+      .finally(() => {
+        mineInFlight = null
+      })
+  }
+  return mineInFlight
 })
 
 export const fetchAdminContainersThunk = createAsyncThunk<AdminContainer[]>('containers/fetchAdmin', async () => {

@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppDispatch, useAppSelector } from '../store/hooks'
 import { fetchContainerSpec, fetchBuildLog } from '../api/containers'
 import { fetchMineContainers, containerStatusPatched } from '../store/slices/containersSlice'
-import { refreshContainerByApp, removeContainer, startContainer, stopContainer, applyDockerCommand } from '../api/containers'
+import {
+  refreshContainerByApp,
+  removeContainer,
+  startContainer,
+  stopContainer,
+  applyDockerCommand,
+  parseDockerRunCommand,
+  findImmutableCommandChanges,
+} from '../api/containers'
 import { useRealtimeStatus } from './useRealtime'
 import { useContainerLogs } from './useContainerLogs'
 import { useEnvConfigs } from './useEnvConfigs'
@@ -121,6 +129,15 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
         return
       }
       appName = currentRecord.app_name
+
+      // Пока идёт сборка/деплой, spec может описывать ещё старый контейнер,
+      // а агент в это время занят сборкой и может не ответить. Статус ведёт
+      // агент через события, поэтому не «проверяем» его и не показываем
+      // ложную ошибку — финальный статус придёт сам.
+      if (IN_PROGRESS_STATUSES.has(currentRecord.status)) {
+        setSyncSuccess('Идёт сборка — статус обновится автоматически')
+        return
+      }
 
       const specRes = await fetchContainerSpec(currentRecord.id)
       const actualStatus = specRes.data.status
@@ -490,6 +507,24 @@ export function useContainerDetail(options: UseContainerDetailOptions): UseConta
 
   const applyEditedCommand = async () => {
     if (!record?.id || !displayedDockerCmd.trim()) return
+
+    let immutableChanges: string[]
+    try {
+      const reference = parseDockerRunCommand(generatedDockerCmd)
+      const edited = parseDockerRunCommand(displayedDockerCmd)
+      immutableChanges = findImmutableCommandChanges(reference, edited)
+    } catch (e) {
+      showMessage(false, e instanceof Error ? e.message : 'Не удалось разобрать команду запуска')
+      return
+    }
+    if (immutableChanges.length > 0) {
+      showMessage(
+        false,
+        `Нельзя изменить ${immutableChanges.join(', ')} запущенного контейнера — для этого обновите приложение.`,
+      )
+      return
+    }
+
     const confirmed = window.confirm('Контейнер будет остановлен и пересоздан с новыми параметрами. Данные в подключённых томах сохранятся, но изменения внутри файловой системы контейнера могут быть потеряны. Продолжить?')
     if (!confirmed) return
     setApplyingCommand(true)

@@ -226,6 +226,9 @@ func buildSharedServices(ctx context.Context, cfg *config.Config, pg *pgxpool.Po
 	// Start disk usage monitor
 	containersService.StartDiskMonitor(ctx, containers.DefaultDiskMonitorConfig())
 
+	// Start expiry monitor
+	containersService.StartExpiryMonitor(ctx, containers.DefaultExpiryMonitorConfig())
+
 	// Deployment Requests
 	deploymentRequestsRepo := deploymentrequests.NewRepository(pg, zlog)
 

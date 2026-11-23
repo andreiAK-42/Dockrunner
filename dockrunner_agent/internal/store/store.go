@@ -213,6 +213,40 @@ func ListDeployments(db *sql.DB) ([]Deployment, error) {
 	return out, rows.Err()
 }
 
+// ListDeploymentsByParent returns every compose service deployment that belongs
+// to one project. The parent itself has no record on the agent, so this is how a
+// refresh knows which services have to be rebuilt together.
+func ListDeploymentsByParent(db *sql.DB, parentID string) ([]Deployment, error) {
+	rows, err := db.Query(`SELECT id, app_id, app_name, owner, repo_url, name,
+		image, container, status, ports, volumes, env, cpu_cores, memory_gb, disk_gb, parent_id, parent_app, service, branch, created_at, updated_at
+		FROM deployments WHERE parent_id = ? ORDER BY service, id`, parentID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []Deployment{}
+	for rows.Next() {
+		var d Deployment
+		var created, updated string
+		if err := scanDeployment(rows, &d, &created, &updated); err != nil {
+			return nil, err
+		}
+		parseDeploymentTime(&d, created, updated)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// CountDeploymentsUsingProject counts deployments that use the same project
+// directory. Compose services live in the parent app folder, and redeploys of
+// the same app reuse it, so a directory may outlive one deployment record.
+func CountDeploymentsUsingProject(db *sql.DB, owner, app string) (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM deployments WHERE owner = ? AND (app_name = ? OR parent_app = ?)`,
+		owner, app, app).Scan(&n)
+	return n, err
+}
+
 func UpdateDeploymentStatus(db *sql.DB, id, status, container string) error {
 	_, err := db.Exec(`UPDATE deployments SET status = ?, container = ?, updated_at = ? WHERE id = ?`,
 		status, container, now(), id)

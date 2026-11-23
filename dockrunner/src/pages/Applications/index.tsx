@@ -62,12 +62,17 @@ export default function Applications() {
       const mineRes = await fetchMine()
       let currentRows = mineRes.data
 
+      // Статусы in-progress (сборка, деплой) ведёт агент через события:
+      // spec в это время может описывать ещё старый контейнер, поэтому не
+      // перезаписываем их и не считаем ошибкой недоступность агента.
+      currentRows = currentRows.filter(
+        (container) => !IN_PROGRESS_STATUSES.has(container.status),
+      )
+
       // Фолбэк-поллинг (WS упал) проверяет только «подозрительные» статусы,
       // чтобы не гонять spec-запрос на каждый контейнер раз в 30 секунд.
       if (onlySuspicious) {
-        currentRows = currentRows.filter(
-          (container) => IN_PROGRESS_STATUSES.has(container.status) || container.status === 'error',
-        )
+        currentRows = currentRows.filter((container) => container.status === 'error')
       }
 
       if (currentRows.length === 0) {

@@ -83,11 +83,17 @@ func publishContainerEvent(hub *realtime.Hub, event admin.AgentEvent) {
 }
 
 // releaseOpForTerminal снимает блокировку операции, когда пришло терминальное событие.
-// У сервис-контейнеров compose замок висит на родительском приложении.
+// У сервис-контейнеров compose замок может висеть и на родителе, и на самом
+// сервисе: обновление сервиса блокируется по его app_name, а события деплоя
+// приходят с родительским OpApp. Снимаем оба ключа, иначе дочерний замок
+// висел бы до TTL.
 func releaseOpForTerminal(event admin.AgentEvent, containersService *containers.Service) {
 	switch event.Type {
 	case "deploy.completed", "deploy.failed", "op.failed",
 		"container.stopped", "container.restarted", "container.removed":
 		containersService.ReleaseOp(event.OwnerLogin, event.OpApp())
+		if event.AppName != "" && event.AppName != event.OpApp() {
+			containersService.ReleaseOp(event.OwnerLogin, event.AppName)
+		}
 	}
 }

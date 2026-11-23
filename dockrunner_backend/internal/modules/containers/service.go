@@ -370,6 +370,47 @@ func (s *Service) syncStatusFromSpec(ctx context.Context, rec *admin.ContainerRe
 	s.publishContainer(rec.OwnerLogin, *rec)
 }
 
+// recreatePort accepts both port shapes used by the API and update requests:
+// {host, container} and {host_port, container_port}.
+type recreatePort struct {
+	Host          int `json:"host"`
+	Container     int `json:"container"`
+	HostPort      int `json:"host_port"`
+	ContainerPort int `json:"container_port"`
+}
+
+func (p recreatePort) host() int {
+	if p.Host != 0 {
+		return p.Host
+	}
+	return p.HostPort
+}
+
+func (p recreatePort) container() int {
+	if p.Container != 0 {
+		return p.Container
+	}
+	return p.ContainerPort
+}
+
+func samePortMappings(current []admin.PortMapping, provided []recreatePort) bool {
+	if len(current) != len(provided) {
+		return false
+	}
+	left := make(map[[2]int]int, len(current))
+	for _, p := range current {
+		left[[2]int{p.HostPort, p.ContainerPort}]++
+	}
+	for _, p := range provided {
+		key := [2]int{p.host(), p.container()}
+		if left[key] == 0 {
+			return false
+		}
+		left[key]--
+	}
+	return true
+}
+
 func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec map[string]any) ([]byte, error) {
 	rec, err := s.store.GetContainer(ctx, id)
 	if err != nil {
@@ -382,17 +423,12 @@ func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec 
 		return nil, err
 	}
 	defer s.ops.Release(rec.OwnerLogin, rec.AppName)
-	responseBody, err := s.agentPost(ctx, rec.NodeID, "/containers/"+id+"/recreate", spec)
-	if err != nil {
-		return nil, err
-	}
-	// Keep the central list in sync with the live container specification.
+	// Fundamental parameters of a running container are immutable: a recreate
+	// may change runtime settings, but moving the app to another port or image
+	// has to go through a full update. Validate before the agent touches it.
 	var updated struct {
-		Image string `json:"image"`
-		Ports []struct {
-			Host      int `json:"host"`
-			Container int `json:"container"`
-		} `json:"ports"`
+		Image         string             `json:"image"`
+		Ports         []recreatePort     `json:"ports"`
 		Volumes       []admin.VolumeSpec `json:"volumes"`
 		Env           map[string]string  `json:"env"`
 		RestartPolicy string             `json:"restart_policy"`
@@ -400,13 +436,26 @@ func (s *Service) RecreateContainer(ctx context.Context, owner, id string, spec 
 	if raw, marshalErr := json.Marshal(spec); marshalErr == nil {
 		_ = json.Unmarshal(raw, &updated)
 	}
+	if _, provided := spec["ports"]; provided && !samePortMappings(rec.Ports, updated.Ports) {
+		return nil, errors.New("порты запущенного контейнера изменить нельзя")
+	}
+	if updated.Image != "" && rec.Image != "" && updated.Image != rec.Image {
+		return nil, errors.New("образ запущенного контейнера изменить нельзя — используйте обновление")
+	}
+	responseBody, err := s.agentPost(ctx, rec.NodeID, "/containers/"+id+"/recreate", spec)
+	if err != nil {
+		return nil, err
+	}
+	// Keep the central list in sync with the live container specification.
 	if updated.Image != "" {
 		rec.Image = updated.Image
 	}
 	rec.Status = "running"
-	rec.Ports = make([]admin.PortMapping, 0, len(updated.Ports))
-	for _, p := range updated.Ports {
-		rec.Ports = append(rec.Ports, admin.PortMapping{HostPort: p.Host, ContainerPort: p.Container})
+	if _, provided := spec["ports"]; provided {
+		rec.Ports = make([]admin.PortMapping, 0, len(updated.Ports))
+		for _, p := range updated.Ports {
+			rec.Ports = append(rec.Ports, admin.PortMapping{HostPort: p.host(), ContainerPort: p.container()})
+		}
 	}
 	// Update volumes, env, restart_policy from spec if provided
 	if len(updated.Volumes) > 0 {
@@ -907,9 +956,19 @@ func (s *Service) RefreshByApp(ctx context.Context, owner, appName string) (stri
 	if err := s.ops.Acquire(owner, appName, "refresh"); err != nil {
 		return "", err
 	}
-	if err := s.store.SetContainerStatus(ctx, rec.ID, "building"); err != nil {
+	// Обновление compose-проекта пересобирает весь проект, а не один сервис.
+	// Поэтому «building» должны получить все его сервисы: иначе соседние
+	// контейнеры в панели остаются «running», хотя агент их уже пересоздаёт.
+	records, err := s.projectRecords(ctx, owner, rec)
+	if err != nil {
 		s.ops.Release(owner, appName)
 		return "", err
+	}
+	for _, sibling := range records {
+		if err := s.store.SetContainerStatus(ctx, sibling.ID, "building"); err != nil {
+			s.ops.Release(owner, appName)
+			return "", err
+		}
 	}
 	body, _ := json.Marshal(map[string]string{
 		"type":          "refresh",
@@ -921,14 +980,59 @@ func (s *Service) RefreshByApp(ctx context.Context, owner, appName string) (stri
 		s.ops.Release(owner, appName)
 		return "", err
 	}
-	rec.Status = "building"
-	s.publishContainer(owner, *rec)
+	for _, sibling := range records {
+		sibling.Status = "building"
+		s.publishContainer(owner, sibling)
+	}
 	return rec.ID, nil
+}
+
+// projectRecords returns the clicked deployment together with every compose
+// service of the same project. The backend has no parent column: compose
+// children are stored as "<project uuid>-<service>", so the shared id prefix
+// is what links them. A single-container deployment is its own project.
+func (s *Service) projectRecords(ctx context.Context, owner string, clicked *admin.ContainerRecord) ([]admin.ContainerRecord, error) {
+	all, err := s.store.ListByOwner(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]admin.ContainerRecord, 0, len(all))
+	for _, rec := range all {
+		if sameDeploymentProject(clicked.ID, rec.ID) {
+			out = append(out, rec)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, *clicked)
+	}
+	return out, nil
+}
+
+// deploymentProjectID strips a compose service suffix from a deployment id.
+// Deployment ids are UUIDs, so the project part ends at the 36th char.
+func deploymentProjectID(id string) string {
+	const uuidLen = 36
+	if len(id) > uuidLen && id[uuidLen] == '-' {
+		return id[:uuidLen]
+	}
+	return id
+}
+
+func sameDeploymentProject(clickedID, candidateID string) bool {
+	projectID := deploymentProjectID(clickedID)
+	return candidateID == projectID || strings.HasPrefix(candidateID, projectID+"-")
 }
 
 // RemoveByID deletes the user's container: owner-scoped, one op per app.
 func (s *Service) RemoveByID(ctx context.Context, owner, id string) error {
-	return s.containerOp(ctx, owner, id, "remove")
+	return s.containerOp(ctx, owner, id, "remove", nil)
+}
+
+// removeExpiredByID deletes an expired deployment together with its data.
+// Expiry is final, so the agent is told to drop the volumes as well; a normal
+// manual remove keeps them.
+func (s *Service) removeExpiredByID(ctx context.Context, owner, id string) error {
+	return s.containerOp(ctx, owner, id, "remove", map[string]any{"remove_volumes": true})
 }
 
 // RemoveDeployment deletes a whole deployment: the record itself plus all
@@ -956,15 +1060,15 @@ func (s *Service) RemoveDeployment(ctx context.Context, owner, parentID string) 
 
 // StartByID starts the user's container (docker restart also starts stopped ones).
 func (s *Service) StartByID(ctx context.Context, owner, id string) error {
-	return s.containerOp(ctx, owner, id, "restart")
+	return s.containerOp(ctx, owner, id, "restart", nil)
 }
 
 // StopByID stops the user's container.
 func (s *Service) StopByID(ctx context.Context, owner, id string) error {
-	return s.containerOp(ctx, owner, id, "stop")
+	return s.containerOp(ctx, owner, id, "stop", nil)
 }
 
-func (s *Service) containerOp(ctx context.Context, owner, id, action string) error {
+func (s *Service) containerOp(ctx context.Context, owner, id, action string, extra map[string]any) error {
 	if s.queue == nil {
 		return ErrNoQueue
 	}
@@ -1109,6 +1213,66 @@ func (s *Service) StartDiskMonitor(ctx context.Context, cfg DiskMonitorConfig) {
 	}()
 }
 
+// ExpiryMonitorConfig configures the expiry monitor.
+type ExpiryMonitorConfig struct {
+	CheckInterval time.Duration // how often to check (default 1m)
+}
+
+// DefaultExpiryMonitorConfig returns sensible defaults.
+func DefaultExpiryMonitorConfig() ExpiryMonitorConfig {
+	return ExpiryMonitorConfig{CheckInterval: time.Minute}
+}
+
+// StartExpiryMonitor starts a background goroutine that removes deployments
+// whose expires_at has passed. Status is deliberately ignored: the user may
+// have stopped the container manually, but it still has to be removed.
+func (s *Service) StartExpiryMonitor(ctx context.Context, cfg ExpiryMonitorConfig) {
+	if cfg.CheckInterval <= 0 {
+		cfg = DefaultExpiryMonitorConfig()
+	}
+	go func() {
+		ticker := time.NewTicker(cfg.CheckInterval)
+		defer ticker.Stop()
+		s.logger.Info("expiry monitor started", zap.Duration("interval", cfg.CheckInterval))
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Info("expiry monitor stopped")
+				return
+			case <-ticker.C:
+				s.removeExpired(ctx)
+			}
+		}
+	}()
+}
+
+// removeExpired removes every container whose expires_at has passed. Each
+// record is removed on its own, so a deployment with diverging per-service
+// expiry dates does not lose a still-valid service. The shared project folder
+// is cleaned up by the agent when its last deployment is gone. A failed
+// removal keeps the record in the database, so the next tick retries it.
+func (s *Service) removeExpired(ctx context.Context) {
+	recs, err := s.store.ListContainers(ctx)
+	if err != nil {
+		s.logger.Warn("expiry monitor: failed to list containers", zap.Error(err))
+		return
+	}
+	now := time.Now()
+	for _, rec := range recs {
+		if rec.ExpiresAt == nil || rec.ExpiresAt.After(now) {
+			continue
+		}
+		s.logger.Info("expiry monitor: removing expired container",
+			zap.String("deployment", rec.ID),
+			zap.String("app", rec.AppName),
+			zap.String("owner", rec.OwnerLogin))
+		if err := s.RemoveByID(ctx, rec.OwnerLogin, rec.ID); err != nil {
+			s.logger.Warn("expiry monitor: remove failed",
+				zap.String("deployment", rec.ID), zap.Error(err))
+		}
+	}
+}
+
 // RequestContainerUpdate creates a deployment request for updating container parameters.
 // This is called by users when they want to change container settings.
 // The request needs admin approval before the container is recreated with new params.
@@ -1121,6 +1285,19 @@ func (s *Service) RequestContainerUpdate(ctx context.Context, owner, deploymentI
 	if rec.OwnerLogin != "" && rec.OwnerLogin != owner {
 		return "", ErrNotFound
 	}
+	// Fundamental parameters cannot be changed by an update request either:
+	// the running container keeps its address and image.
+	if raw, ok := params["ports"]; ok {
+		var requested []recreatePort
+		if data, err := json.Marshal(raw); err == nil {
+			if err := json.Unmarshal(data, &requested); err == nil && !samePortMappings(rec.Ports, requested) {
+				return "", errors.New("порты запущенного контейнера изменить нельзя")
+			}
+		}
+	}
+	if image, ok := params["image"].(string); ok && image != "" && rec.Image != "" && image != rec.Image {
+		return "", errors.New("образ запущенного контейнера изменить нельзя — используйте обновление")
+	}
 
 	// Acquire operation lock to prevent concurrent operations
 	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, "request_update"); err != nil {
@@ -1132,9 +1309,9 @@ func (s *Service) RequestContainerUpdate(ctx context.Context, owner, deploymentI
 	// Use the admin repository's pool to do a direct insert
 	requestID := uuid.NewString()
 
-	// Build ports - use direct marshal since rec.Ports is now []PortMapping
-	portsVal := getOrDefault(params, "ports", rec.Ports)
-	portsJSON, _ := json.Marshal(portsVal)
+	// Ports and image are immutable, so the request always carries the current
+	// values (and the deploy-shaped JSON the request repository expects).
+	portsJSON, _ := json.Marshal(rec.Ports)
 
 	// Build volumes - use direct marshal since rec.Volumes is now []VolumeSpec
 	volumesVal := getOrDefault(params, "volumes", rec.Volumes)

@@ -44,7 +44,10 @@ export default function DockerCommandEditor({
           </Alert>
         )}
         <Alert severity="info">
-          Можно изменить строку и скопировать её. Это не изменяет уже созданный контейнер: чтобы применить параметры, его необходимо пересоздать.
+          В строке показаны параметры запуска и build-args, которые агент передаёт в сборку.
+          Комментарии <code># --build-arg …</code> — справочные: они применяются только при
+          сборке («Обновить»). Имя контейнера, образ, сеть и порты запущенного контейнера
+          изменить нельзя — для этого нужно обновить приложение.
         </Alert>
         <Stack direction="row" spacing={1}>
           <Button size="small" startIcon={<Copy size={14} />} onClick={onCopy} disabled={!displayedDockerCmd.trim()}>

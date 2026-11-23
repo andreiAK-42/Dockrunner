@@ -73,13 +73,18 @@ export default function Dashboard() {
       const mineRes = await fetchMine()
       let currentContainers = mineRes.data
 
+      // Статусы in-progress (сборка, деплой) ведёт агент через события:
+      // spec в это время может описывать ещё старый контейнер, поэтому не
+      // перезаписываем их и не считаем ошибкой недоступность агента.
+      currentContainers = currentContainers.filter(
+        (container) => !IN_PROGRESS_STATUSES.has(container.status),
+      )
+
       // При периодическом фолбэке (WS упал) проверяем только контейнеры,
       // чей статус мог рассинхронизоваться — иначе это N+1 spec-запросов
       // на каждый контейнер раз в 30 секунд.
       if (onlySuspicious) {
-        currentContainers = currentContainers.filter(
-          (container) => IN_PROGRESS_STATUSES.has(container.status) || container.status === 'error',
-        )
+        currentContainers = currentContainers.filter((container) => container.status === 'error')
       }
 
       if (currentContainers.length === 0) {

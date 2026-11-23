@@ -92,6 +92,9 @@ export interface ContainerSpec {
   ports: ContainerSpecPort[]
   volumes: ContainerSpecVolume[]
   env: Record<string, string> | null
+  // Build args are the deployment env vars that Docker accepts as ARG values.
+  // They are shown in the launch row but applied only during a rebuild.
+  build_args?: Record<string, string> | null
   entrypoint?: string[]
   cmd?: string[]
   restart_policy?: string
@@ -252,8 +255,18 @@ export interface ParsedDockerRunCommand {
   network?: string
 }
 
+// Строки-комментарии показывают build-args (это параметр сборки, а не run)
+// и не должны мешать разбору команды запуска.
+function stripCommandComments(command: string): string {
+  return command
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n')
+    .trim()
+}
+
 export function parseDockerRunCommand(command: string): ParsedDockerRunCommand {
-  const args = tokenizeDockerCommand(command)
+  const args = tokenizeDockerCommand(stripCommandComments(command))
   if (args[0] !== 'docker' || args[1] !== 'run') throw new Error('Ожидается команда docker run')
   const result: ParsedDockerRunCommand = { name: '', image: '', env: {}, ports: [], volumes: [], restart_policy: 'no', entrypoint: [], cmd: [], working_dir: '', user: '' }
   let i = 2
@@ -282,6 +295,30 @@ export function parseDockerRunCommand(command: string): ParsedDockerRunCommand {
   if (!result.image) throw new Error('В команде не указан образ контейнера')
   if (!result.name) throw new Error('В команде не указано имя контейнера (--name)')
   return result
+}
+
+function portsSignature(ports: ParsedDockerRunCommand['ports']): string {
+  return (ports ?? [])
+    .map((port) => `${port.host}:${port.container}`)
+    .sort()
+    .join(',')
+}
+
+/**
+ * Fundamental parameters identify a running container. Editing them through the
+ * launch command would move the app to another port/name/image/network, which
+ * only a full update may do.
+ */
+export function findImmutableCommandChanges(
+  reference: ParsedDockerRunCommand,
+  edited: ParsedDockerRunCommand,
+): string[] {
+  const changes: string[] = []
+  if (reference.name !== edited.name) changes.push('имя контейнера')
+  if (reference.image !== edited.image) changes.push('образ')
+  if ((reference.network ?? '') !== (edited.network ?? '')) changes.push('сеть')
+  if (portsSignature(reference.ports) !== portsSignature(edited.ports)) changes.push('порты')
+  return changes
 }
 
 export function applyDockerCommand(id: string, command: string) {

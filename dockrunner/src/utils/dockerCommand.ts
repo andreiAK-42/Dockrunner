@@ -31,6 +31,17 @@ export function formatVolumeMount(volume: { name?: string; host_path?: string; c
 }
 
 /**
+ * Build args are passed to `docker build`, not `docker run`. They are shown as
+ * comments in the editable launch row; the parser ignores comment lines.
+ */
+export function specBuildArgLines(spec: ContainerSpec | null): string {
+  const entries = Object.entries(spec?.build_args ?? {})
+  return entries
+    .map(([key, value]) => `# --build-arg ${shellArg(`${key}=${value}`)}`)
+    .join('\n')
+}
+
+/**
  * Build docker run command from container spec and environment args
  */
 export function buildDockerRun(spec: ContainerSpec | null, envArgs: string): string {
@@ -56,7 +67,9 @@ export function buildDockerRun(spec: ContainerSpec | null, envArgs: string): str
     args.push(cmdArgs.map(shellArg).join(' '))
   }
 
-  return args.filter(Boolean).join(' ').trim()
+  const command = args.filter(Boolean).join(' ').trim()
+  const buildArgs = specBuildArgLines(spec)
+  return buildArgs ? `${buildArgs}\n${command}` : command
 }
 
 /**
