@@ -183,20 +183,132 @@ func (h *Handler) remove(ctx context.Context, task Task) error {
 		}
 		return err
 	}
-	if err := h.dock.Remove(ctx, dep.Container); err != nil && !docker.IsMissing(err) {
-		h.logger.Warn("remove failed", "deployment", task.DeploymentID, "error", err)
-		_ = h.publishEvent(ctx, appEvent("op.failed", task, "удаление не удалось: "+err.Error()))
-		return queue.Permanent(err)
+	removeErr := h.dock.Remove(ctx, dep.Container)
+	if task.RemoveVolumes {
+		removeErr = h.dock.RemoveWithVolumes(ctx, dep.Container)
 	}
+	if removeErr != nil && !docker.IsMissing(removeErr) {
+		h.logger.Warn("remove failed", "deployment", task.DeploymentID, "error", removeErr)
+		_ = h.publishEvent(ctx, appEvent("op.failed", task, "удаление не удалось: "+removeErr.Error()))
+		return queue.Permanent(removeErr)
+	}
+	// Общие ресурсы (тома, сеть, папка) чистим под одним замком: иначе
+	// параллельные remove успевают увидеть друг друга и ничего не удаляют.
+	h.removeMu.Lock()
 	_ = store.DeleteDeployment(h.db, task.DeploymentID)
+	removedVolumes := h.cleanupProjectResources(ctx, dep, task.RemoveVolumes)
 	h.removeProjectDir(dep)
+	h.removeMu.Unlock()
 
 	if h.onStopped != nil {
 		h.onStopped(dep.Container)
 	}
 	// Терминальное событие обязано уйти — иначе централь хранит запись
 	// и держит операционный замок до TTL.
-	return h.publishEvent(ctx, appEvent("container.removed", task, "приложение удалено"))
+	ev := appEvent("container.removed", task, "приложение удалено")
+	ev.RemovedVolumes = removedVolumes
+	return h.publishEvent(ctx, ev)
+}
+
+// cleanupProjectResources удаляет общие ресурсы, у которых больше нет
+// владельца: тома истёкшего деплоя и сеть compose-проекта. Возвращает имена
+// реально удалённых томов, чтобы центр убрал их из своего списка.
+func (h *Handler) cleanupProjectResources(ctx context.Context, dep *store.Deployment, removeVolumes bool) []string {
+	var removed []string
+	if removeVolumes {
+		removed = h.removeUnusedVolumes(ctx, dep)
+	}
+	h.removeComposeNetwork(ctx, dep)
+	return removed
+}
+
+// removeUnusedVolumes удаляет именованные тома деплоя, если их больше не
+// монтирует ни одна оставшаяся запись. Пути хоста не трогаем, а анонимные
+// тома Docker удаляет вместе с контейнером.
+func (h *Handler) removeUnusedVolumes(ctx context.Context, dep *store.Deployment) []string {
+	var volumes []VolumeTask
+	if err := json.Unmarshal([]byte(dep.Volumes), &volumes); err != nil {
+		return nil
+	}
+	remaining, err := store.ListDeployments(h.db)
+	if err != nil {
+		h.logger.Warn("failed to list deployments for volume cleanup", "error", err)
+		return nil
+	}
+	removed := make([]string, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume.Name == "" || volume.HostPath != "" || volumeInUse(remaining, volume.Name) {
+			continue
+		}
+		name, err := sanitizeVolumeName(volume.Name)
+		if err != nil {
+			continue
+		}
+		if err := h.dock.VolumeRemove(ctx, name); err != nil && !docker.IsMissing(err) {
+			h.logger.Warn("failed to remove volume", "volume", name, "error", err)
+			continue
+		}
+		removed = append(removed, name)
+	}
+	return removed
+}
+
+// volumeInUse сообщает, монтирует ли имя тома какая-нибудь оставшаяся запись.
+func volumeInUse(deployments []store.Deployment, name string) bool {
+	for _, dep := range deployments {
+		var volumes []VolumeTask
+		if err := json.Unmarshal([]byte(dep.Volumes), &volumes); err != nil {
+			continue
+		}
+		for _, volume := range volumes {
+			if volume.Name == name && volume.HostPath == "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// composeNetworkName возвращает общую сеть compose-проекта.
+func composeNetworkName(dep *store.Deployment) (string, bool) {
+	if dep.ParentID == "" || dep.Service == "" {
+		return "", false
+	}
+	app := parentAppName(dep)
+	name, err := sanitizeContainerName(app, app+"-net", dep.ParentID)
+	if err != nil {
+		return "", false
+	}
+	return name, true
+}
+
+// removeComposeNetwork удаляет сеть проекта, когда в ней не осталось его
+// сервисов. Docker не даст удалить сеть с подключёнными концами, поэтому
+// оставшийся сервис просто сохранит её до своего удаления.
+func (h *Handler) removeComposeNetwork(ctx context.Context, dep *store.Deployment) {
+	netName, ok := composeNetworkName(dep)
+	if !ok {
+		return
+	}
+	remaining, err := store.ListDeployments(h.db)
+	if err != nil {
+		h.logger.Warn("failed to list deployments for network cleanup", "error", err)
+		return
+	}
+	app := parentAppName(dep)
+	for _, other := range remaining {
+		if other.ParentID == "" || other.Service == "" {
+			continue
+		}
+		if parentAppName(&other) == app {
+			return
+		}
+	}
+	if err := h.dock.NetworkRemove(ctx, netName); err != nil && !docker.IsMissing(err) {
+		h.logger.Warn("failed to remove compose network", "network", netName, "error", err)
+		return
+	}
+	h.logger.Info("compose network removed", "network", netName)
 }
 
 // parentAppName returns the app that owns the project folder. For compose

@@ -45,6 +45,13 @@ func (s *Service) Delete(ctx context.Context, owner, node, name string) error {
 	return s.repo.Delete(ctx, owner, node, name)
 }
 
+// DeleteRecord drops volume metadata without asking the agent. Used when the
+// agent has already removed the volume itself (expiry), so no second task is
+// needed.
+func (s *Service) DeleteRecord(ctx context.Context, owner, node, name string) error {
+	return s.repo.Delete(ctx, owner, node, name)
+}
+
 type NamedVolume struct {
 	Name          string
 	ContainerPath string

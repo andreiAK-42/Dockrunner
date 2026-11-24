@@ -151,27 +151,29 @@ func (s *Service) UpdateContainerParams(ctx context.Context, id string, params m
 type DetectedPort struct {
 	ContainerPort int    `json:"container_port"`
 	Protocol      string `json:"protocol"`
-	Source        string `json:"source"` // "dockerfile" or "compose"
+	Source        string `json:"source"`            // "dockerfile" or "compose"
 	Service       string `json:"service,omitempty"` // service name for compose
 }
 
 type AgentEvent struct {
-	Type               string           `json:"type"`
-	AgentID            string           `json:"agent_id"`
-	AppID              string           `json:"app_id"`
-	AppName            string           `json:"app_name"`
-	OwnerLogin         string           `json:"owner_login"`
-	Image              string           `json:"image"`
-	DeploymentID       string           `json:"deployment_id"`
-	DetectedDockerfile bool             `json:"detected_dockerfile"`
-	ComposeFile        string           `json:"compose_file"`
-	Services           []string         `json:"services"`
-	Branches           []string         `json:"branches,omitempty"`
+	Type               string            `json:"type"`
+	AgentID            string            `json:"agent_id"`
+	AppID              string            `json:"app_id"`
+	AppName            string            `json:"app_name"`
+	OwnerLogin         string            `json:"owner_login"`
+	Image              string            `json:"image"`
+	DeploymentID       string            `json:"deployment_id"`
+	DetectedDockerfile bool              `json:"detected_dockerfile"`
+	ComposeFile        string            `json:"compose_file"`
+	Services           []string          `json:"services"`
+	Branches           []string          `json:"branches,omitempty"`
 	DetectedEnvVars    map[string]string `json:"detected_env_vars,omitempty"`
-	DetectedPorts      []DetectedPort   `json:"detected_ports,omitempty"`
-	ParentApp          string           `json:"parent_app"`
-	Ports              []PortMapping    `json:"ports"`
-	Message            string           `json:"msg"`
+	DetectedPorts      []DetectedPort    `json:"detected_ports,omitempty"`
+	ParentApp          string            `json:"parent_app"`
+	Ports              []PortMapping     `json:"ports"`
+	// RemovedVolumes — именованные тома, удалённые агентом вместе с деплоем.
+	RemovedVolumes []string `json:"removed_volumes,omitempty"`
+	Message        string   `json:"msg"`
 }
 
 // OpApp возвращает приложение для oplock: у сервис-контейнеров это родитель.

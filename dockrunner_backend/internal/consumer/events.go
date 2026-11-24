@@ -44,6 +44,11 @@ func StartEvents(ctx context.Context, q *queue.Client, adminService *admin.Servi
 			logger.Warn("apply agent event failed", zap.Error(err))
 			return err
 		}
+		if event.Type == "container.removed" && len(event.RemovedVolumes) > 0 {
+			// Агент уже удалил тома на узле (удаление по сроку) — убираем
+			// их записи из списка томов, чтобы он не показывал несуществующие.
+			containersService.ForgetVolumes(ctx, event.OwnerLogin, event.AgentID, event.RemovedVolumes)
+		}
 
 		publishContainerEvent(hub, event)
 		releaseOpForTerminal(event, containersService)

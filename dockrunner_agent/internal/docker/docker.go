@@ -126,6 +126,18 @@ func (c *Client) Remove(ctx context.Context, id string) error {
 	return c.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: false})
 }
 
+// RemoveWithVolumes удаляет контейнер вместе с его анонимными томами.
+// Именованные тома Docker при этом сохраняет — их чистят отдельно.
+func (c *Client) RemoveWithVolumes(ctx context.Context, id string) error {
+	return c.cli.ContainerRemove(ctx, id, container.RemoveOptions{Force: true, RemoveVolumes: true})
+}
+
+// NetworkRemove удаляет пользовательскую сеть (например, общую сеть
+// compose-проекта). Ошибка «not found» означает, что цель уже достигнута.
+func (c *Client) NetworkRemove(ctx context.Context, name string) error {
+	return c.cli.NetworkRemove(ctx, name)
+}
+
 // Rename переименовывает контейнер (например, чтобы сохранить старую версию
 // как резерв до успешного запуска новой).
 func (c *Client) Rename(ctx context.Context, id, name string) error {

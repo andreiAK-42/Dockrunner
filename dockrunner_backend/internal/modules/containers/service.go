@@ -1035,6 +1035,24 @@ func (s *Service) removeExpiredByID(ctx context.Context, owner, id string) error
 	return s.containerOp(ctx, owner, id, "remove", map[string]any{"remove_volumes": true})
 }
 
+// ForgetVolumes drops volume metadata for named volumes the agent has already
+// removed. Only expiry asks the agent to delete volumes, so manual removals
+// keep both the data and its record.
+func (s *Service) ForgetVolumes(ctx context.Context, owner, node string, names []string) {
+	if s.volumes == nil {
+		return
+	}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if err := s.volumes.DeleteRecord(ctx, owner, node, name); err != nil {
+			s.logger.Warn("failed to forget removed volume",
+				zap.String("volume", name), zap.Error(err))
+		}
+	}
+}
+
 // RemoveDeployment deletes a whole deployment: the record itself plus all
 // «app-service» children (multi-service compose). Best effort.
 func (s *Service) RemoveDeployment(ctx context.Context, owner, parentID string) error {
@@ -1087,14 +1105,18 @@ func (s *Service) containerOp(ctx context.Context, owner, id, action string, ext
 	if err := s.ops.Acquire(rec.OwnerLogin, rec.AppName, action); err != nil {
 		return err
 	}
-	body, _ := json.Marshal(map[string]string{
+	body := map[string]any{
 		"type":          action,
 		"deployment_id": rec.ID,
 		"app_id":        rec.AppID,
 		"app_name":      rec.AppName,
 		"owner":         rec.OwnerLogin,
-	})
-	if err := s.queue.Publish(ctx, "agent."+rec.NodeID, body); err != nil {
+	}
+	for key, value := range extra {
+		body[key] = value
+	}
+	raw, _ := json.Marshal(body)
+	if err := s.queue.Publish(ctx, "agent."+rec.NodeID, raw); err != nil {
 		s.ops.Release(rec.OwnerLogin, rec.AppName)
 		return err
 	}
@@ -1248,9 +1270,11 @@ func (s *Service) StartExpiryMonitor(ctx context.Context, cfg ExpiryMonitorConfi
 
 // removeExpired removes every container whose expires_at has passed. Each
 // record is removed on its own, so a deployment with diverging per-service
-// expiry dates does not lose a still-valid service. The shared project folder
-// is cleaned up by the agent when its last deployment is gone. A failed
-// removal keeps the record in the database, so the next tick retries it.
+// expiry dates does not lose a still-valid service. Expiry is final: the agent
+// also drops the deployment volumes, the shared compose network goes when its
+// last service disappears, and the project folder is cleaned up when no
+// deployment uses it anymore. A failed removal keeps the record in the
+// database, so the next tick retries it.
 func (s *Service) removeExpired(ctx context.Context) {
 	recs, err := s.store.ListContainers(ctx)
 	if err != nil {
@@ -1266,7 +1290,7 @@ func (s *Service) removeExpired(ctx context.Context) {
 			zap.String("deployment", rec.ID),
 			zap.String("app", rec.AppName),
 			zap.String("owner", rec.OwnerLogin))
-		if err := s.RemoveByID(ctx, rec.OwnerLogin, rec.ID); err != nil {
+		if err := s.removeExpiredByID(ctx, rec.OwnerLogin, rec.ID); err != nil {
 			s.logger.Warn("expiry monitor: remove failed",
 				zap.String("deployment", rec.ID), zap.Error(err))
 		}

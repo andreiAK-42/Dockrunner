@@ -88,6 +88,10 @@ type Task struct {
 	BuildMode string   `json:"build_mode"`
 	// Branch — git branch to clone (required if repo_url is set).
 	Branch string `json:"branch"`
+	// RemoveVolumes — удалить вместе с контейнером его тома и данные.
+	// Ставится только при удалении по истечении срока: обычное ручное
+	// удаление сохраняет тома.
+	RemoveVolumes bool `json:"remove_volumes,omitempty"`
 }
 
 type Event struct {
@@ -110,8 +114,11 @@ type Event struct {
 	// (нужно центру, чтобы снять oplock родительской операции).
 	ParentApp string     `json:"parent_app,omitempty"`
 	Ports     []PortTask `json:"ports"`
-	Message   string     `json:"msg"`
-	Time      string     `json:"time"`
+	// RemovedVolumes — именованные тома, удалённые вместе с деплоем по
+	// истечении срока. Центр по ним убирает записи из списка томов.
+	RemovedVolumes []string `json:"removed_volumes,omitempty"`
+	Message        string   `json:"msg"`
+	Time           string   `json:"time"`
 }
 
 type DetectedPort struct {
@@ -137,7 +144,10 @@ type Handler struct {
 	onStopped     func(containerID string)
 	mu            sync.Mutex
 	appLocks      map[string]*sync.Mutex
-	hostMu        sync.RWMutex
+	// removeMu сериализует удаление записей и общую чистку ресурсов проекта
+	// (сеть, тома, папка), чтобы параллельные remove не оставили мусор.
+	removeMu sync.Mutex
+	hostMu   sync.RWMutex
 }
 
 func NewHandler(agentID, workspace string, db *sql.DB, dock *docker.Client, queue *queue.Client, logger *slog.Logger, builds *buildlog.Store, onReady func(string, string), onStopped func(string)) *Handler {
